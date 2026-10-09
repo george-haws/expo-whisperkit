@@ -10,18 +10,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "expo.modules.whisperkit.example"
     },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false,
-      "package": "expo.modules.whisperkit.example"
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      ["../app.plugin.js", { "microphonePermission": "The example app listens so WhisperKit can transcribe." }]
+    ]
   }
 }

@@ -1,9 +1,7 @@
 import { NativeModule, requireOptionalNativeModule } from 'expo';
 
-import { ExpoWhisperKitModuleEvents } from './ExpoWhisperKit.types';
-
-declare class ExpoWhisperKitModule extends NativeModule<ExpoWhisperKitModuleEvents> {
-  setValueAsync(value: string): Promise<void>;
+declare class ExpoWhisperKitModule extends NativeModule<Record<string, never>> {
+  deviceName(): string;
 }
 
 export default requireOptionalNativeModule<ExpoWhisperKitModule>('ExpoWhisperKit');

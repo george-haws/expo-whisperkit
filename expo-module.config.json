@@ -1,6 +1,7 @@
 {
   "platforms": ["apple"],
   "apple": {
-    "modules": ["ExpoWhisperKitModule"]
+    "modules": ["ExpoWhisperKitModule"],
+    "podspecPath": "ios/ExpoWhisperKit.podspec"
   }
 }

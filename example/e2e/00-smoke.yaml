@@ -1,0 +1,5 @@
+appId: expo.modules.whisperkit.example
+---
+- launchApp
+- assertVisible:
+    id: "device-name"
