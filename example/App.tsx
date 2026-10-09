@@ -70,9 +70,10 @@ export default function App() {
         return await WhisperKit.stopRecording({ model });
       } finally {
         setCapture('idle');
-        setPttDone(true);
       }
     });
+    // After `run` has settled, so any error text is rendered before the done marker.
+    setPttDone(true);
   }
 
   const [confirmed, setConfirmed] = useState('');
@@ -103,9 +104,10 @@ export default function App() {
         return await WhisperKit.stopStreaming();
       } finally {
         setCapture('idle');
-        setStreamDone(true);
       }
     });
+    // After `run` has settled, so any error text is rendered before the done marker.
+    setStreamDone(true);
   }
 
   /** Deterministic push-to-talk for Maestro: two seconds of capture, then stop. */

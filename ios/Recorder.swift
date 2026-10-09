@@ -30,6 +30,10 @@ actor Recorder {
   /// Set while `startStreaming` awaits the load, and while `endStreaming` tears down.
   private var streamStarting = false
   private var streamEnding = false
+  /// An interruption or teardown that arrived while `startStreaming` was loading the model.
+  /// Checked once the load returns, before the microphone starts; `.cancel` wins over `.interrupt`.
+  private var streamAbortRequested: StreamAbort?
+  enum StreamAbort { case interrupt, cancel }
 
   init(engine: Engine, emitLevel: @escaping LevelEmitter, emitStreaming: @escaping StreamingEmitter) {
     self.engine = engine
@@ -115,19 +119,28 @@ actor Recorder {
     if mode == .recording {
       _ = endCapture()
     }
-    pendingSamples = nil
+    // Audio kept by a streaming interruption belongs to `stopStreaming`; leave it alone.
+    if streamRequestAfterInterrupt == nil {
+      pendingSamples = nil
+    }
     stopTask?.cancel()
   }
 
   /// Phone call, Siri, or the app leaving the foreground. Push-to-talk audio is kept for the
-  /// next `stopRecording`; a streaming session ends with its final result discarded to the
-  /// caller's pending `stopStreaming`, if any (Task 7).
+  /// next `stopRecording`; a streaming session ends and its audio is kept for the next
+  /// `stopStreaming`. A streaming session still loading is aborted before the microphone starts.
   func interrupt() async {
     switch mode {
     case .recording:
       pendingSamples = endCapture()
     case .streaming:
-      await interruptStreaming()
+      if streamStarting {
+        if streamAbortRequested == nil {
+          streamAbortRequested = .interrupt
+        }
+      } else {
+        await interruptStreaming()
+      }
     case .idle:
       break
     }
@@ -180,13 +193,28 @@ actor Recorder {
     // Reserve the capture before the first await, so a concurrent start gets `busy`.
     mode = .streaming
     streamStarting = true
+    streamAbortRequested = nil
     let instance: WhisperKit
     do {
       instance = try await engine.beginExclusiveLoad(request.model, download: request.download)
     } catch {
       streamStarting = false
+      streamAbortRequested = nil
       mode = .idle
       throw error
+    }
+    if let abort = streamAbortRequested {
+      // Interrupted or torn down during the load: never bring the microphone up.
+      await engine.endExclusive()
+      streamStarting = false
+      streamAbortRequested = nil
+      mode = .idle
+      if abort == .interrupt {
+        // Ended without an error, like any interruption; a later `stopStreaming` resolves (empty).
+        streamRequestAfterInterrupt = request
+        pendingSamples = []
+      }
+      return
     }
     guard let tokenizer = instance.tokenizer else {
       await engine.endExclusive()
@@ -221,12 +249,15 @@ actor Recorder {
     streamTranscriber = transcriber
     streamRequest = request
     streamStarting = false
-    // The task is assigned below before this actor can run `streamingFailed`, which needs the actor.
+    // The task is assigned below before this actor can run `streamingEnded`, which needs the actor.
     streamTask = Task { [weak self] in
       do {
+        // Returns normally when WhisperKit's loop stops itself (a decode error, or its own
+        // permission re-check failing) as well as after our own `stopStreamTranscription`.
         try await transcriber.startStreamTranscription()
+        await self?.streamingEnded(nil)
       } catch {
-        await self?.streamingFailed(error)
+        await self?.streamingEnded(error)
       }
     }
     let processor = instance.audioProcessor
@@ -237,7 +268,7 @@ actor Recorder {
     if mode != .streaming, let pending = pendingSamples, let request = streamRequestAfterInterrupt {
       pendingSamples = nil
       streamRequestAfterInterrupt = nil
-      return try await engine.transcribe(samples: pending, request: request)
+      return try await finalTranscription(pending, request)
     }
     guard mode == .streaming else {
       throw WhisperKitError(.recordingFailed, "Not streaming")
@@ -246,6 +277,15 @@ actor Recorder {
       throw WhisperKitError(.busy, "The streaming session is starting or already stopping")
     }
     let samples = await endStreaming()
+    return try await finalTranscription(samples, request)
+  }
+
+  /// No audio (a session aborted while loading, or ended before any buffer arrived) resolves
+  /// with empty text instead of asking WhisperKit to decode an empty array.
+  private func finalTranscription(_ samples: [Float], _ request: DecodingRequest) async throws -> [String: Any] {
+    if samples.isEmpty {
+      return ["text": "", "language": request.language ?? "", "segments": [[String: Any]]()]
+    }
     return try await engine.transcribe(samples: samples, request: request)
   }
 
@@ -259,6 +299,9 @@ actor Recorder {
 
   /// Module teardown: end any live session and discard its audio.
   func cancelStreaming() async {
+    if mode == .streaming && streamStarting {
+      streamAbortRequested = .cancel
+    }
     if isStreamLive {
       _ = await endStreaming()
     }
@@ -268,13 +311,18 @@ actor Recorder {
     }
   }
 
-  /// `startStreamTranscription` threw (for example the microphone could not start). It runs inside
+  /// WhisperKit's capture loop ended on its own: it threw (for example the microphone could not
+  /// start) or stopped itself. Ends the session like an interruption, keeping the audio for a later
+  /// `stopStreaming`. A no-op when the Recorder started the stop (`streamEnding`). It runs inside
   /// `streamTask`, so the task is detached first: `endStreaming` must not await the task it runs in.
-  private func streamingFailed(_ error: Error) async {
+  private func streamingEnded(_ error: Error?) async {
     guard isStreamLive else { return }
-    NSLog("[ExpoWhisperKit] streaming ended with an error: \(error.localizedDescription)")
+    if let error {
+      NSLog("[ExpoWhisperKit] streaming ended with an error: \(error.localizedDescription)")
+    }
     streamTask = nil
-    _ = await endStreaming()
+    streamRequestAfterInterrupt = streamRequest
+    pendingSamples = await endStreaming()
   }
 
   /// A session that has finished starting and is not already ending.
@@ -310,6 +358,8 @@ actor Recorder {
     return samples
   }
 
+  /// WhisperKit's own placeholder for `currentText`, copied from the `"Waiting for speech..."` strings
+  /// in WhisperKit's `AudioStreamTranscriber.swift` (`transcribeCurrentBuffer`). Update if reworded.
   static let waitingPlaceholder = "Waiting for speech..."
 }
 
