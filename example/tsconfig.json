@@ -1,0 +1,10 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "expo-whisperkit": ["../src/index"],
+      "expo-whisperkit/*": ["../src/*"]
+    }
+  }
+}
