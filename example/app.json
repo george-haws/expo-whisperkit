@@ -11,7 +11,13 @@
       "bundleIdentifier": "expo.modules.whisperkit.example"
     },
     "plugins": [
-      ["../app.plugin.js", { "microphonePermission": "The example app listens so WhisperKit can transcribe." }]
+      [
+        "../app.plugin.js",
+        {
+          "microphonePermission": "The example app listens so WhisperKit can transcribe."
+        }
+      ],
+      "expo-asset"
     ]
   }
 }

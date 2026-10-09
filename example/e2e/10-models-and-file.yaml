@@ -1,0 +1,77 @@
+# Download, transcribe the bundled fixture, unload on a memory warning, reload lazily,
+# delete, and re-download through a transcription. Needs network for the ~150 MB `base` model.
+appId: expo.modules.whisperkit.example
+---
+- launchApp
+- assertVisible:
+    id: "availability"
+    text: "available"
+- tapOn:
+    id: "delete"
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "absent"
+    timeout: 30000
+- tapOn:
+    id: "download"
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "downloading"
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "present"
+    timeout: 900000
+- tapOn:
+    id: "transcribe-fixture"
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "loaded"
+    timeout: 300000
+- extendedWaitUntil:
+    visible:
+      text: "(?i).*quick brown fox.*"
+    timeout: 300000
+- assertNotVisible:
+    text: "decode-failed.*"
+- tapOn:
+    id: "memory-warning"
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "present"
+    timeout: 30000
+- tapOn:
+    id: "transcribe-fixture"
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "loaded"
+    timeout: 300000
+- tapOn:
+    id: "delete"
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "absent"
+    timeout: 30000
+- tapOn:
+    id: "transcribe-fixture"
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "downloading"
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: "status"
+      text: "loaded"
+    timeout: 900000
+- extendedWaitUntil:
+    visible:
+      text: "(?i).*quick brown fox.*"
+    timeout: 300000

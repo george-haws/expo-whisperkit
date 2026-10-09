@@ -1,0 +1,109 @@
+import Foundation
+import WhisperKit
+
+/// Where models live and how they get there (spec §3.3).
+///
+///   <Application Support>/expo-whisperkit/models/<name>     final, "present"
+///   <Application Support>/expo-whisperkit/downloads/<name>  in flight, cleared on launch and failure
+///   <Application Support>/expo-whisperkit/tokenizers        WhisperKit's tokenizer cache, so loads work offline
+actor ModelStore {
+  let root: URL
+  let modelsDir: URL
+  let downloadsDir: URL
+  let tokenizersDir: URL
+  private var downloading: Set<String> = []
+
+  init() {
+    let support = (try? FileManager.default.url(
+      for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+    )) ?? FileManager.default.temporaryDirectory
+    root = support.appendingPathComponent("expo-whisperkit", isDirectory: true)
+    modelsDir = root.appendingPathComponent("models", isDirectory: true)
+    downloadsDir = root.appendingPathComponent("downloads", isDirectory: true)
+    tokenizersDir = root.appendingPathComponent("tokenizers", isDirectory: true)
+    try? FileManager.default.removeItem(at: downloadsDir)
+    for dir in [modelsDir, downloadsDir, tokenizersDir] {
+      try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    var excluded = root
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try? excluded.setResourceValues(values)
+  }
+
+  func finalFolder(for model: String) -> URL {
+    modelsDir.appendingPathComponent(model, isDirectory: true)
+  }
+
+  func isPresent(_ model: String) -> Bool {
+    var isDir: ObjCBool = false
+    return FileManager.default.fileExists(atPath: finalFolder(for: model).path, isDirectory: &isDir) && isDir.boolValue
+  }
+
+  func isDownloading(_ model: String) -> Bool {
+    downloading.contains(model)
+  }
+
+  func listPresent() -> [String] {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: modelsDir.path)) ?? []
+    return names.filter { isPresent($0) }.sorted()
+  }
+
+  func delete(_ model: String) throws {
+    for url in [finalFolder(for: model), downloadsDir.appendingPathComponent(model, isDirectory: true)] {
+      if FileManager.default.fileExists(atPath: url.path) {
+        try FileManager.default.removeItem(at: url)
+      }
+    }
+  }
+
+  /// Downloads `model`, performs one load (validates the files and caches the tokenizer), then
+  /// moves the folder into place. Returns the final folder.
+  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+    if isPresent(model) {
+      return finalFolder(for: model)
+    }
+    guard !downloading.contains(model) else {
+      throw WhisperKitError(.busy, "Model \(model) is already downloading")
+    }
+    downloading.insert(model)
+    defer { downloading.remove(model) }
+
+    let base = downloadsDir.appendingPathComponent(model, isDirectory: true)
+    try? FileManager.default.removeItem(at: base)
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+
+    do {
+      let folder = try await WhisperKit.download(
+        variant: model,
+        downloadBase: base,
+        progressCallback: { p in progress(p.fractionCompleted) }
+      )
+      progress(1)
+      // First load. If this throws the files are unusable; the caller sees download-failed.
+      let config = WhisperKitConfig(
+        modelFolder: folder.path,
+        tokenizerFolder: tokenizersDir,
+        verbose: false,
+        logLevel: .error,
+        prewarm: false,
+        load: true,
+        download: false
+      )
+      let probe = try await WhisperKit(config)
+      await probe.unloadModels()
+
+      let final = finalFolder(for: model)
+      try? FileManager.default.removeItem(at: final)
+      try FileManager.default.moveItem(at: folder, to: final)
+      try? FileManager.default.removeItem(at: base)
+      return final
+    } catch let error as WhisperKitError {
+      try? FileManager.default.removeItem(at: base)
+      throw error
+    } catch {
+      try? FileManager.default.removeItem(at: base)
+      throw WhisperKitError(.downloadFailed, "Downloading \(model) failed: \(error.localizedDescription)", underlying: error)
+    }
+  }
+}
