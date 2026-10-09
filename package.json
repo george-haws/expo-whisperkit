@@ -20,7 +20,7 @@
   "scripts": {
     "build": "node internal/module_scripts/build.js",
     "clean": "node internal/module_scripts/clean.js",
-    "lint": "eslint src/",
+    "lint": "eslint src/ plugin/src/",
     "test": "node internal/module_scripts/test.js",
     "prepare": "node internal/module_scripts/prepare.js",
     "open:ios": "node internal/module_scripts/open-ios.js"
@@ -35,6 +35,7 @@
   "devDependencies": {
     "@babel/core": "^7.29.7",
     "@types/jest": "^29.5.14",
+    "@types/node": "^22.20.2",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "~57.0.14",
     "eslint": "~9.39.4",

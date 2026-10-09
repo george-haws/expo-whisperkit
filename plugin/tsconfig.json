@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "module": "node16",
+    "target": "es2020",
+    "moduleResolution": "node16",
+    "outDir": "build",
+    "rootDir": "src",
+    "declaration": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node", "jest"]
+  },
+  "include": ["./src"],
+  "exclude": ["**/__tests__/*"]
+}
