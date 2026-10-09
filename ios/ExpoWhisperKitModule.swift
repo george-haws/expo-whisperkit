@@ -1,3 +1,4 @@
+import AVFoundation
 import ExpoModulesCore
 import UIKit
 import WhisperKit
@@ -5,6 +6,8 @@ import WhisperKit
 public class ExpoWhisperKitModule: Module {
   private var engine: Engine!
   private var memoryWarningObserver: NSObjectProtocol?
+  private var recorder: Recorder!
+  private var sessionObservers: [NSObjectProtocol] = []
   private let progressThrottle = Throttle(interval: 0.25)
 
   public func definition() -> ModuleDefinition {
@@ -30,12 +33,37 @@ public class ExpoWhisperKitModule: Module {
         guard let engine = self?.engine else { return }
         Task { await engine.unload() }
       }
+      self.recorder = Recorder(
+        engine: self.engine,
+        emitLevel: { [weak self] level in
+          self?.sendEvent("audioLevel", ["level": level])
+        },
+        emitStreaming: { [weak self] confirmed, pending in
+          self?.sendEvent("streamingUpdate", ["confirmedText": confirmed, "pendingText": pending])
+        }
+      )
+      let center = NotificationCenter.default
+      self.sessionObservers = [
+        center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] note in
+          let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+          guard raw == AVAudioSession.InterruptionType.began.rawValue, let recorder = self?.recorder else { return }
+          Task { await recorder.interrupt() }
+        },
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] _ in
+          guard let recorder = self?.recorder else { return }
+          Task { await recorder.interrupt() }
+        },
+      ]
     }
 
     OnDestroy {
       if let observer = self.memoryWarningObserver {
         NotificationCenter.default.removeObserver(observer)
       }
+      for observer in self.sessionObservers {
+        NotificationCenter.default.removeObserver(observer)
+      }
+      self.sessionObservers = []
     }
 
     // MARK: Models
@@ -81,6 +109,31 @@ public class ExpoWhisperKitModule: Module {
         }
         return try await self.engine.transcribe(path: path, request: options)
       }
+    }
+
+    // MARK: Push-to-talk
+
+    AsyncFunction("getMicrophonePermission") { () -> String in
+      Recorder.permissionStatus()
+    }
+
+    AsyncFunction("requestMicrophonePermission") { () async -> String in
+      await Recorder.requestPermission()
+    }
+
+    AsyncFunction("startRecording") { () async throws in
+      try await self.bridged(fallback: .recordingFailed) { try await self.recorder.startRecording() }
+    }
+
+    AsyncFunction("stopRecording") { (options: DecodingRequest) async throws -> [String: Any] in
+      try await self.bridged(fallback: .decodeFailed) {
+        _ = try Self.validated(options.model)
+        return try await self.recorder.stopRecording(request: options)
+      }
+    }
+
+    AsyncFunction("cancelRecording") { () async throws in
+      try await self.bridged(fallback: .recordingFailed) { await self.recorder.cancelRecording() }
     }
 
     // MARK: Testing

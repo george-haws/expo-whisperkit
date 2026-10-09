@@ -45,6 +45,43 @@ export default function App() {
     }
   }
 
+  const [permission, setPermission] = useState<WhisperKit.PermissionStatus | 'unknown'>('unknown');
+  const [capture, setCapture] = useState<'idle' | 'recording' | 'streaming'>('idle');
+  const [level, setLevel] = useState(0);
+  const [pttDone, setPttDone] = useState(false);
+
+  useEffect(() => {
+    WhisperKit.getMicrophonePermission().then(setPermission).catch(() => {});
+    const sub = WhisperKit.addListener('audioLevel', (p) => setLevel(p.level));
+    return () => sub.remove();
+  }, []);
+
+  async function startRecording() {
+    setPttDone(false);
+    await run('start', async () => {
+      await WhisperKit.startRecording();
+      setCapture('recording');
+    });
+  }
+
+  async function stopRecording() {
+    await run('stop', async () => {
+      try {
+        return await WhisperKit.stopRecording({ model });
+      } finally {
+        setCapture('idle');
+        setPttDone(true);
+      }
+    });
+  }
+
+  /** Deterministic push-to-talk for Maestro: two seconds of capture, then stop. */
+  async function recordTwoSeconds() {
+    await startRecording();
+    await new Promise((r) => setTimeout(r, 2000));
+    await stopRecording();
+  }
+
   async function fixturePath() {
     const asset = Asset.fromModule(require('./assets/fixture.wav'));
     await asset.downloadAsync();
@@ -77,6 +114,28 @@ export default function App() {
           />
           <Button testID="memory-warning" title="Memory warning" onPress={() => run('memory', () => WhisperKit.simulateMemoryWarningForTesting())} />
         </View>
+
+        <Text style={styles.label}>Microphone</Text>
+        <Text testID="permission">{permission}</Text>
+        <Button
+          testID="request-permission"
+          title="Request permission"
+          onPress={() => run('permission', async () => setPermission(await WhisperKit.requestMicrophonePermission()))}
+        />
+        <Text style={styles.label}>Capture</Text>
+        <Text testID="capture">{capture}</Text>
+        <Text testID="level">{`level ${Math.round(level * 100)}`}</Text>
+        <View style={styles.row}>
+          <Button testID="start-recording" title="Start" onPress={startRecording} />
+          <Button testID="stop-recording" title="Stop" onPress={stopRecording} />
+          <Button testID="record-2s" title="Record 2 s" onPress={recordTwoSeconds} />
+          <Button
+            testID="cancel-recording"
+            title="Cancel"
+            onPress={() => run('cancel', async () => { await WhisperKit.cancelRecording(); setCapture('idle'); })}
+          />
+        </View>
+        {pttDone && <Text testID="ptt-done">push-to-talk finished</Text>}
 
         <Text style={styles.label}>Transcript</Text>
         <Text testID="transcript" style={styles.transcript}>{transcript}</Text>

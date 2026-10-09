@@ -187,7 +187,7 @@ actor Engine {
 
   /// Runs any deferred unload first and releases `busy` only after it completes.
   func endExclusive() async {
-    if unloadAfterCurrent {
+    while unloadAfterCurrent {
       unloadAfterCurrent = false
       await unloadNow()
     }

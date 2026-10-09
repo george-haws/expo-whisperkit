@@ -1,0 +1,40 @@
+# Push-to-talk on the simulator: the microphone is the Mac's, so the transcript is not asserted,
+# only that capture starts, stops, and resolves. Needs the `base` model from flow 10 to be present
+# (the stop call downloads it otherwise, which is slow but correct).
+# Precondition: `xcrun simctl privacy <udid> grant microphone expo.modules.whisperkit.example`.
+appId: expo.modules.whisperkit.example
+---
+- launchApp
+- assertVisible:
+    id: "permission"
+    text: "granted"
+- tapOn:
+    id: "start-recording"
+- extendedWaitUntil:
+    visible:
+      id: "capture"
+      text: "recording"
+    timeout: 10000
+- tapOn:
+    id: "cancel-recording"
+- extendedWaitUntil:
+    visible:
+      id: "capture"
+      text: "idle"
+    timeout: 10000
+- tapOn:
+    id: "record-2s"
+- extendedWaitUntil:
+    visible:
+      id: "capture"
+      text: "recording"
+    timeout: 10000
+- extendedWaitUntil:
+    visible:
+      id: "ptt-done"
+    timeout: 900000
+- assertVisible:
+    id: "capture"
+    text: "idle"
+- assertNotVisible:
+    text: "stop: .*"
