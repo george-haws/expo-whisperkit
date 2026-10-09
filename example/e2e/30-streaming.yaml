@@ -1,0 +1,33 @@
+# Streaming on the simulator: starts, runs for a few seconds of (Mac microphone) audio, stops,
+# and resolves. Partial text is not asserted because the input is whatever the Mac hears.
+# Precondition: microphone granted (see flow 20) and the `base` model present (flow 10).
+appId: expo.modules.whisperkit.example
+---
+- launchApp
+- assertVisible:
+    id: "permission"
+    text: "granted"
+- tapOn:
+    id: "start-streaming"
+- extendedWaitUntil:
+    visible:
+      id: "capture"
+      text: "streaming"
+    timeout: 300000
+- extendedWaitUntil:
+    visible:
+      id: "level"
+      text: "level [1-9][0-9]*"
+    timeout: 10000
+    optional: true
+- tapOn:
+    id: "stop-streaming"
+- extendedWaitUntil:
+    visible:
+      id: "stream-done"
+    timeout: 300000
+- assertVisible:
+    id: "capture"
+    text: "idle"
+- assertNotVisible:
+    text: "stream-stop: .*"

@@ -75,6 +75,39 @@ export default function App() {
     });
   }
 
+  const [confirmed, setConfirmed] = useState('');
+  const [pending, setPending] = useState('');
+  const [streamDone, setStreamDone] = useState(false);
+
+  useEffect(() => {
+    const sub = WhisperKit.addListener('streamingUpdate', (p) => {
+      setConfirmed(p.confirmedText);
+      setPending(p.pendingText);
+    });
+    return () => sub.remove();
+  }, []);
+
+  async function startStreaming() {
+    setStreamDone(false);
+    setConfirmed('');
+    setPending('');
+    await run('stream-start', async () => {
+      await WhisperKit.startStreaming({ model });
+      setCapture('streaming');
+    });
+  }
+
+  async function stopStreaming() {
+    await run('stream-stop', async () => {
+      try {
+        return await WhisperKit.stopStreaming();
+      } finally {
+        setCapture('idle');
+        setStreamDone(true);
+      }
+    });
+  }
+
   /** Deterministic push-to-talk for Maestro: two seconds of capture, then stop. */
   async function recordTwoSeconds() {
     await startRecording();
@@ -136,6 +169,15 @@ export default function App() {
           />
         </View>
         {pttDone && <Text testID="ptt-done">push-to-talk finished</Text>}
+
+        <Text style={styles.label}>Streaming</Text>
+        <View style={styles.row}>
+          <Button testID="start-streaming" title="Start streaming" onPress={startStreaming} />
+          <Button testID="stop-streaming" title="Stop streaming" onPress={stopStreaming} />
+        </View>
+        <Text testID="streaming-confirmed">{confirmed}</Text>
+        <Text testID="streaming-pending" style={{ color: '#888' }}>{pending}</Text>
+        {streamDone && <Text testID="stream-done">streaming finished</Text>}
 
         <Text style={styles.label}>Transcript</Text>
         <Text testID="transcript" style={styles.transcript}>{transcript}</Text>

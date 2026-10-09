@@ -64,6 +64,13 @@ public class ExpoWhisperKitModule: Module {
         NotificationCenter.default.removeObserver(observer)
       }
       self.sessionObservers = []
+      // A reload mid-capture must not leave the microphone tap and the audio session live.
+      if let recorder = self.recorder {
+        Task {
+          await recorder.cancelRecording()
+          await recorder.cancelStreaming()
+        }
+      }
     }
 
     // MARK: Models
@@ -134,6 +141,19 @@ public class ExpoWhisperKitModule: Module {
 
     AsyncFunction("cancelRecording") { () async throws in
       try await self.bridged(fallback: .recordingFailed) { await self.recorder.cancelRecording() }
+    }
+
+    // MARK: Streaming
+
+    AsyncFunction("startStreaming") { (options: DecodingRequest) async throws in
+      try await self.bridged(fallback: .recordingFailed) {
+        _ = try Self.validated(options.model)
+        try await self.recorder.startStreaming(request: options)
+      }
+    }
+
+    AsyncFunction("stopStreaming") { () async throws -> [String: Any] in
+      try await self.bridged(fallback: .decodeFailed) { try await self.recorder.stopStreaming() }
     }
 
     // MARK: Testing

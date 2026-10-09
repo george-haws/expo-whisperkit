@@ -27,6 +27,9 @@ actor Recorder {
   var streamRequest: DecodingRequest?
   /// Set by an interruption while streaming so a later `stopStreaming` can still transcribe the kept audio.
   var streamRequestAfterInterrupt: DecodingRequest?
+  /// Set while `startStreaming` awaits the load, and while `endStreaming` tears down.
+  private var streamStarting = false
+  private var streamEnding = false
 
   init(engine: Engine, emitLevel: @escaping LevelEmitter, emitStreaming: @escaping StreamingEmitter) {
     self.engine = engine
@@ -83,7 +86,7 @@ actor Recorder {
     let samples: [Float]
     if mode == .recording {
       samples = endCapture()
-    } else if let pending = pendingSamples {
+    } else if let pending = pendingSamples, streamRequestAfterInterrupt == nil {
       pendingSamples = nil
       samples = pending
     } else {
@@ -161,6 +164,167 @@ actor Recorder {
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
   }
 
-  /// Placeholder until Task 7 fills it in.
-  func interruptStreaming() async {}
+  // MARK: Streaming
+
+  /// Starts a live session. Exclusivity on the engine is taken here and released exactly once,
+  /// by `endStreaming` (or on a setup failure below).
+  func startStreaming(request: DecodingRequest) async throws {
+    guard mode == .idle else {
+      throw WhisperKitError(.busy, "A capture session is already active")
+    }
+    guard Self.permissionStatus() == "granted" else {
+      throw WhisperKitError(.permissionDenied, "Microphone permission has not been granted")
+    }
+    pendingSamples = nil
+    streamRequestAfterInterrupt = nil
+    // Reserve the capture before the first await, so a concurrent start gets `busy`.
+    mode = .streaming
+    streamStarting = true
+    let instance: WhisperKit
+    do {
+      instance = try await engine.beginExclusiveLoad(request.model, download: request.download)
+    } catch {
+      streamStarting = false
+      mode = .idle
+      throw error
+    }
+    guard let tokenizer = instance.tokenizer else {
+      await engine.endExclusive()
+      streamStarting = false
+      mode = .idle
+      throw WhisperKitError(.loadFailed, "The tokenizer did not load")
+    }
+
+    let dedupe = StreamingDedupe()
+    let emit = emitStreaming
+    let placeholder = Self.waitingPlaceholder
+    let transcriber = AudioStreamTranscriber(
+      audioEncoder: instance.audioEncoder,
+      featureExtractor: instance.featureExtractor,
+      segmentSeeker: instance.segmentSeeker,
+      textDecoder: instance.textDecoder,
+      tokenizer: tokenizer,
+      audioProcessor: instance.audioProcessor,
+      decodingOptions: request.decodingOptions(tokenizer: tokenizer),
+      stateChangeCallback: { _, state in
+        let confirmed = state.confirmedSegments.map(\.text).joined()
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        // WhisperKit fills `currentText` with a placeholder while it waits for voice; it is not text.
+        let current = state.currentText == placeholder ? "" : state.currentText
+        let pending = (state.unconfirmedSegments.map(\.text).joined() + " " + current)
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        if dedupe.changed(confirmed, pending) {
+          emit(confirmed, pending)
+        }
+      }
+    )
+    streamTranscriber = transcriber
+    streamRequest = request
+    streamStarting = false
+    // The task is assigned below before this actor can run `streamingFailed`, which needs the actor.
+    streamTask = Task { [weak self] in
+      do {
+        try await transcriber.startStreamTranscription()
+      } catch {
+        await self?.streamingFailed(error)
+      }
+    }
+    let processor = instance.audioProcessor
+    startLevelTask { processor.relativeEnergy.last ?? 0 }
+  }
+
+  func stopStreaming() async throws -> [String: Any] {
+    if mode != .streaming, let pending = pendingSamples, let request = streamRequestAfterInterrupt {
+      pendingSamples = nil
+      streamRequestAfterInterrupt = nil
+      return try await engine.transcribe(samples: pending, request: request)
+    }
+    guard mode == .streaming else {
+      throw WhisperKitError(.recordingFailed, "Not streaming")
+    }
+    guard !streamStarting, !streamEnding, let request = streamRequest else {
+      throw WhisperKitError(.busy, "The streaming session is starting or already stopping")
+    }
+    let samples = await endStreaming()
+    return try await engine.transcribe(samples: samples, request: request)
+  }
+
+  /// Interruption while streaming: end the session; the audio and the request are kept so a
+  /// later `stopStreaming` returns a transcription of what was captured.
+  func interruptStreaming() async {
+    guard isStreamLive else { return }
+    streamRequestAfterInterrupt = streamRequest
+    pendingSamples = await endStreaming()
+  }
+
+  /// Module teardown: end any live session and discard its audio.
+  func cancelStreaming() async {
+    if isStreamLive {
+      _ = await endStreaming()
+    }
+    if streamRequestAfterInterrupt != nil {
+      pendingSamples = nil
+      streamRequestAfterInterrupt = nil
+    }
+  }
+
+  /// `startStreamTranscription` threw (for example the microphone could not start). It runs inside
+  /// `streamTask`, so the task is detached first: `endStreaming` must not await the task it runs in.
+  private func streamingFailed(_ error: Error) async {
+    guard isStreamLive else { return }
+    NSLog("[ExpoWhisperKit] streaming ended with an error: \(error.localizedDescription)")
+    streamTask = nil
+    _ = await endStreaming()
+  }
+
+  /// A session that has finished starting and is not already ending.
+  private var isStreamLive: Bool {
+    mode == .streaming && !streamStarting && !streamEnding && streamTranscriber != nil
+  }
+
+  /// Ends the session once: stops the transcriber and the microphone, collects the audio,
+  /// deactivates the audio session and releases the engine's exclusivity.
+  private func endStreaming() async -> [Float] {
+    streamEnding = true
+    let transcriber = streamTranscriber
+    let task = streamTask
+    streamTranscriber = nil
+    streamTask = nil
+    streamRequest = nil
+    if let transcriber {
+      await transcriber.stopStreamTranscription()
+    }
+    await task?.value
+    stopLevelTask()
+    var samples: [Float] = []
+    // Exclusivity is still held, so the instance cannot have been unloaded.
+    if let instance = await engine.current {
+      instance.audioProcessor.stopRecording()
+      samples = Array(instance.audioProcessor.audioSamples)
+      instance.audioProcessor.purgeAudioSamples(keepingLast: 0)
+    }
+    deactivateSession()
+    await engine.endExclusive()
+    streamEnding = false
+    mode = .idle
+    return samples
+  }
+
+  static let waitingPlaceholder = "Waiting for speech..."
+}
+
+/// `streamingUpdate` fires only when the text changes (spec §3.4).
+final class StreamingDedupe: @unchecked Sendable {
+  private var last: (String, String) = ("", "")
+  private let lock = NSLock()
+
+  func changed(_ confirmed: String, _ pending: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if last == (confirmed, pending) {
+      return false
+    }
+    last = (confirmed, pending)
+    return true
+  }
 }
