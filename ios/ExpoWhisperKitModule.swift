@@ -62,7 +62,7 @@ public class ExpoWhisperKitModule: Module {
 
     AsyncFunction("loadModel") { (model: String) async throws in
       try await self.bridged(fallback: .loadFailed) {
-        _ = try await self.engine.ensureLoaded(try Self.validated(model), download: true)
+        try await self.engine.ensureLoaded(try Self.validated(model), download: true)
       }
     }
 
@@ -104,10 +104,10 @@ public class ExpoWhisperKitModule: Module {
     }
   }
 
-  /// Rejects names that would escape the models folder: "" would target the folder itself and
-  /// ".." the whole store.
+  /// Rejects names that would escape or alias the models folder: "" and "." target the folder
+  /// itself, ".." the whole store, and "/" a nested path. Hidden names (leading ".") are refused too.
   static func validated(_ model: String) throws -> String {
-    if model.isEmpty || model.contains("/") || model.contains("..") {
+    if model.isEmpty || model.hasPrefix(".") || model.contains("/") || model.contains("..") {
       throw WhisperKitError(.modelMissing, "Invalid model name")
     }
     return model

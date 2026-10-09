@@ -59,33 +59,48 @@ actor Engine {
   }
 
   func delete(_ model: String) async throws {
-    if busy {
-      throw WhisperKitError(.busy, "Another operation is running")
+    // Hold exclusivity for the whole delete so no load or decode can start during its awaits.
+    try beginExclusive()
+    do {
+      if await store.isDownloading(model) {
+        throw WhisperKitError(.busy, "Model \(model) is downloading")
+      }
+      if loadedModel == model {
+        await unloadNow()
+      }
+      try await store.delete(model)
+      emitState(model, "absent")
+    } catch {
+      await endExclusive()
+      throw error
     }
-    if await store.isDownloading(model) {
-      throw WhisperKitError(.busy, "Model \(model) is downloading")
-    }
-    // Re-check after the suspension above: a load or decode may have started meanwhile.
-    if busy {
-      throw WhisperKitError(.busy, "Another operation is running")
-    }
-    if loadedModel == model {
-      await unloadNow()
-    }
-    try await store.delete(model)
-    emitState(model, "absent")
+    await endExclusive()
   }
 
-  func ensureLoaded(_ model: String, download: Bool) async throws -> WhisperKit {
-    if let whisperKit, loadedModel == model {
-      return whisperKit
+  /// Loads `model` (downloading it first if `download` is set). Used by `loadModel`; it returns
+  /// nothing because an instance handed out after exclusivity ends could already be unloading.
+  func ensureLoaded(_ model: String, download: Bool) async throws {
+    if whisperKit != nil, loadedModel == model {
+      return
     }
     try beginExclusive()
     do {
-      let instance = try await loadLocked(model, download: download)
-      // Exit through endExclusive so a memory warning that arrived during the load is honoured now.
+      _ = try await loadLocked(model, download: download)
+    } catch {
       await endExclusive()
-      return instance
+      throw error
+    }
+    // Exit through endExclusive so a memory warning that arrived during the load is honoured now.
+    await endExclusive()
+  }
+
+  /// Takes exclusivity and loads `model`. On success the instance is returned with exclusivity
+  /// STILL HELD: the caller must call `endExclusive()` when done (streaming, Task 7). On failure
+  /// exclusivity is released before the error is rethrown.
+  func beginExclusiveLoad(_ model: String, download: Bool) async throws -> WhisperKit {
+    try beginExclusive()
+    do {
+      return try await loadLocked(model, download: download)
     } catch {
       await endExclusive()
       throw error
@@ -139,13 +154,14 @@ actor Engine {
 
   private func unloadNow() async {
     guard let instance = whisperKit else { return }
-    await instance.unloadModels()
+    // Detach first, so no fast path can observe an instance that is being unloaded.
     let model = loadedModel
     whisperKit = nil
     loadedModel = nil
     if let model {
       emitState(model, "present")
     }
+    await instance.unloadModels()
   }
 
   func transcribe(path: String, request: DecodingRequest) async throws -> [String: Any] {
@@ -169,12 +185,13 @@ actor Engine {
     busy = true
   }
 
+  /// Runs any deferred unload first and releases `busy` only after it completes.
   func endExclusive() async {
-    busy = false
     if unloadAfterCurrent {
       unloadAfterCurrent = false
       await unloadNow()
     }
+    busy = false
   }
 
   /// One exclusive section covering load and decode, so a deferred unload (memory warning) runs
@@ -191,6 +208,9 @@ actor Engine {
     } catch let error as WhisperKitError {
       await endExclusive()
       throw error
+    } catch is CancellationError {
+      await endExclusive()
+      throw WhisperKitError(.cancelled, "Transcription was cancelled")
     } catch {
       await endExclusive()
       throw WhisperKitError(.decodeFailed, "Transcription failed: \(error.localizedDescription)", underlying: error)
