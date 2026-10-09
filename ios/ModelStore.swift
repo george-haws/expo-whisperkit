@@ -71,9 +71,9 @@ actor ModelStore {
 
     let base = downloadsDir.appendingPathComponent(model, isDirectory: true)
     try? FileManager.default.removeItem(at: base)
-    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
 
     do {
+      try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
       let folder = try await WhisperKit.download(
         variant: model,
         downloadBase: base,

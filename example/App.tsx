@@ -34,6 +34,7 @@ export default function App() {
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setError('');
+    setTranscript('');
     try {
       const result = await fn();
       if (typeof result === 'object' && result && 'text' in result) {
@@ -41,8 +42,6 @@ export default function App() {
       }
     } catch (e) {
       setError(`${label}: ${describe(e)}`);
-    } finally {
-      refresh();
     }
   }
 
@@ -81,7 +80,7 @@ export default function App() {
 
         <Text style={styles.label}>Transcript</Text>
         <Text testID="transcript" style={styles.transcript}>{transcript}</Text>
-        <Text testID="error" style={styles.error}>{error}</Text>
+        {error !== '' && <Text testID="error" style={styles.error}>{error}</Text>}
       </ScrollView>
     </SafeAreaView>
   );

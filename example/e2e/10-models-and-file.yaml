@@ -37,7 +37,7 @@ appId: expo.modules.whisperkit.example
       text: "(?i).*quick brown fox.*"
     timeout: 300000
 - assertNotVisible:
-    text: "decode-failed.*"
+    id: "error"
 - tapOn:
     id: "memory-warning"
 - extendedWaitUntil:
@@ -52,6 +52,13 @@ appId: expo.modules.whisperkit.example
       id: "status"
       text: "loaded"
     timeout: 300000
+# Wait for the decode to finish: delete refuses with `busy` while a transcription runs.
+- extendedWaitUntil:
+    visible:
+      text: "(?i).*quick brown fox.*"
+    timeout: 300000
+- assertNotVisible:
+    id: "error"
 - tapOn:
     id: "delete"
 - extendedWaitUntil:
@@ -75,3 +82,5 @@ appId: expo.modules.whisperkit.example
     visible:
       text: "(?i).*quick brown fox.*"
     timeout: 300000
+- assertNotVisible:
+    id: "error"

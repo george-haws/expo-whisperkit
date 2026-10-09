@@ -40,11 +40,18 @@ actor Engine {
     if await store.isPresent(model) {
       return
     }
+    // Refuse a second download before emitting anything, so listeners never see a false "absent".
+    if await store.isDownloading(model) {
+      throw WhisperKitError(.busy, "Model \(model) is already downloading")
+    }
     emitState(model, "downloading")
     do {
       let emitProgress = self.emitProgress
       _ = try await store.download(model) { fraction in emitProgress(model, fraction) }
       emitState(model, "present")
+    } catch let error as WhisperKitError where error.code == .busy {
+      // Another download of this model won the race; its own events describe the state.
+      throw error
     } catch {
       emitState(model, "absent")
       throw error
@@ -52,6 +59,16 @@ actor Engine {
   }
 
   func delete(_ model: String) async throws {
+    if busy {
+      throw WhisperKitError(.busy, "Another operation is running")
+    }
+    if await store.isDownloading(model) {
+      throw WhisperKitError(.busy, "Model \(model) is downloading")
+    }
+    // Re-check after the suspension above: a load or decode may have started meanwhile.
+    if busy {
+      throw WhisperKitError(.busy, "Another operation is running")
+    }
     if loadedModel == model {
       await unloadNow()
     }
@@ -71,12 +88,12 @@ actor Engine {
         throw WhisperKitError(.modelMissing, "Model \(model) is not downloaded")
       }
       try await self.download(model)
-      if busy {
-        throw WhisperKitError(.busy, "Another operation is running")
-      }
+    }
+    // Actor reentrancy: re-check with no suspension between the check and taking the flag.
+    if busy {
+      throw WhisperKitError(.busy, "Another operation is running")
     }
     busy = true
-    defer { busy = false }
     await unloadNow()
     let folder = await store.finalFolder(for: model)
     let config = WhisperKitConfig(
@@ -93,10 +110,13 @@ actor Engine {
       whisperKit = instance
       loadedModel = model
       emitState(model, "loaded")
+      // Exit through endExclusive so a memory warning that arrived during the load is honoured now.
+      await endExclusive()
       return instance
     } catch {
       try? await store.delete(model)
       emitState(model, "absent")
+      await endExclusive()
       throw WhisperKitError(.loadFailed, "Loading \(model) failed: \(error.localizedDescription)", underlying: error)
     }
   }
