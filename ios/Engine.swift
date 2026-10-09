@@ -80,8 +80,23 @@ actor Engine {
     if let whisperKit, loadedModel == model {
       return whisperKit
     }
-    if busy {
-      throw WhisperKitError(.busy, "Another operation is running")
+    try beginExclusive()
+    do {
+      let instance = try await loadLocked(model, download: download)
+      // Exit through endExclusive so a memory warning that arrived during the load is honoured now.
+      await endExclusive()
+      return instance
+    } catch {
+      await endExclusive()
+      throw error
+    }
+  }
+
+  /// Downloads if needed, unloads any other model, and loads `model`. The caller must already
+  /// hold exclusivity (`beginExclusive`), so nothing here checks or changes `busy`.
+  private func loadLocked(_ model: String, download: Bool) async throws -> WhisperKit {
+    if let whisperKit, loadedModel == model {
+      return whisperKit
     }
     if !(await store.isPresent(model)) {
       guard download else {
@@ -89,11 +104,6 @@ actor Engine {
       }
       try await self.download(model)
     }
-    // Actor reentrancy: re-check with no suspension between the check and taking the flag.
-    if busy {
-      throw WhisperKitError(.busy, "Another operation is running")
-    }
-    busy = true
     await unloadNow()
     let folder = await store.finalFolder(for: model)
     let config = WhisperKitConfig(
@@ -110,13 +120,10 @@ actor Engine {
       whisperKit = instance
       loadedModel = model
       emitState(model, "loaded")
-      // Exit through endExclusive so a memory warning that arrived during the load is honoured now.
-      await endExclusive()
       return instance
     } catch {
       try? await store.delete(model)
       emitState(model, "absent")
-      await endExclusive()
       throw WhisperKitError(.loadFailed, "Loading \(model) failed: \(error.localizedDescription)", underlying: error)
     }
   }
@@ -142,20 +149,19 @@ actor Engine {
   }
 
   func transcribe(path: String, request: DecodingRequest) async throws -> [String: Any] {
-    let instance = try await ensureLoaded(request.model, download: request.download)
-    return try await decode(with: instance) {
+    try await exclusiveTranscription(request) { instance in
       try await instance.transcribe(audioPath: path, decodeOptions: request.decodingOptions(tokenizer: instance.tokenizer))
     }
   }
 
   func transcribe(samples: [Float], request: DecodingRequest) async throws -> [String: Any] {
-    let instance = try await ensureLoaded(request.model, download: request.download)
-    return try await decode(with: instance) {
+    try await exclusiveTranscription(request) { instance in
       try await instance.transcribe(audioArray: samples, decodeOptions: request.decodingOptions(tokenizer: instance.tokenizer))
     }
   }
 
-  /// Marks the engine busy for the duration of a streaming session (Task 7).
+  /// Marks the engine busy: a single synchronous check-and-set (no await), so actor reentrancy
+  /// cannot let two callers through. Used by loads, transcriptions and streaming (Task 7).
   func beginExclusive() throws {
     if busy {
       throw WhisperKitError(.busy, "Another operation is running")
@@ -171,15 +177,17 @@ actor Engine {
     }
   }
 
-  private func decode(with instance: WhisperKit, _ body: () async throws -> [TranscriptionResult]) async throws -> [String: Any] {
+  /// One exclusive section covering load and decode, so a deferred unload (memory warning) runs
+  /// only after decoding finishes. `endExclusive` runs exactly once on every path.
+  private func exclusiveTranscription(
+    _ request: DecodingRequest,
+    _ body: (WhisperKit) async throws -> [TranscriptionResult]
+  ) async throws -> [String: Any] {
     try beginExclusive()
+    let results: [TranscriptionResult]
     do {
-      let results = try await body()
-      await endExclusive()
-      if Task.isCancelled {
-        throw WhisperKitError(.cancelled, "Transcription was cancelled")
-      }
-      return Payloads.merged(results)
+      let instance = try await loadLocked(request.model, download: request.download)
+      results = try await body(instance)
     } catch let error as WhisperKitError {
       await endExclusive()
       throw error
@@ -187,5 +195,10 @@ actor Engine {
       await endExclusive()
       throw WhisperKitError(.decodeFailed, "Transcription failed: \(error.localizedDescription)", underlying: error)
     }
+    await endExclusive()
+    if Task.isCancelled {
+      throw WhisperKitError(.cancelled, "Transcription was cancelled")
+    }
+    return Payloads.merged(results)
   }
 }
