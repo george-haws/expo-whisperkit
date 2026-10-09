@@ -1,0 +1,9 @@
+node_modules/
+build/
+plugin/build/
+.expo/
+example/ios/
+example/android/
+*.tsbuildinfo
+.DS_Store
+.superpowers/
