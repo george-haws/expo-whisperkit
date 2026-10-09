@@ -26,13 +26,15 @@ Add the config plugin to `app.json`:
 
 Then `npx expo prebuild -p ios` and build a dev build (`npx expo run:ios`). The plugin adds two pods that compile WhisperKit from source; no CocoaPods plugin or Ruby gem is needed. First `pod install` clones the WhisperKit repo once into the CocoaPods cache.
 
-Requirements: Expo SDK 57, iOS 16.4, Xcode 16 or newer.
+Requirements: Expo SDK 57, iOS 16.4, Xcode 16 or newer; tested with Xcode 27.
 
-Known limitation of the config plugin: it inserts its pods after a Podfile line that is exactly `use_expo_modules!`. If your Podfile calls `use_expo_modules!` with arguments or a trailing comment, prebuild fails with a clear error. In that case add the two `pod` lines by hand, right after the `use_expo_modules!` call:
+Known limitation of the config plugin: it inserts its pods after a Podfile line that has `use_expo_modules!` alone on it (indentation allowed). If your Podfile calls `use_expo_modules!` with arguments or a trailing comment, prebuild fails with a clear error. In that case add this block by hand, right after the `use_expo_modules!` call. The two marker comments are required: the plugin skips its insertion when it finds `# expo-whisperkit (begin)`, and without the markers every prebuild fails again.
 
 ```ruby
+# expo-whisperkit (begin)
 pod 'ArgmaxCore', :podspec => '../node_modules/expo-whisperkit/ios/ArgmaxCore.podspec'
 pod 'WhisperKit', :podspec => '../node_modules/expo-whisperkit/ios/WhisperKit.podspec'
+# expo-whisperkit (end)
 ```
 
 ## Usage
