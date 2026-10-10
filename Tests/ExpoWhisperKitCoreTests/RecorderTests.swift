@@ -172,4 +172,189 @@ final class RecorderTests: XCTestCase {
     try await Task.sleep(nanoseconds: 250_000_000)
     XCTAssertEqual(events.levels.count, count, "level events stop with the capture")
   }
+
+  // MARK: Streaming
+
+  func testStartStreamingNeedsPermission() async {
+    let recorder = makeRecorder(permission: "undetermined")
+    do {
+      try await recorder.startStreaming(request: request)
+      XCTFail("expected permission-denied")
+    } catch {
+      XCTAssertEqual(code(error), .permissionDenied)
+    }
+    XCTAssertEqual(model.session.startCalls, 0)
+  }
+
+  func testStartStreamingMakesASessionAndHoldsTheEngine() async throws {
+    let recorder = makeRecorder()
+    try await recorder.startStreaming(request: request)
+    XCTAssertEqual(model.session.startCalls, 1)
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .streaming)
+    let busy = await engine.isBusy
+    XCTAssertTrue(busy)
+    _ = try await recorder.stopStreaming()
+  }
+
+  func testSecondStartWhileStreamingIsBusy() async throws {
+    let recorder = makeRecorder()
+    try await recorder.startStreaming(request: request)
+    do {
+      try await recorder.startStreaming(request: request)
+      XCTFail("expected busy")
+    } catch {
+      XCTAssertEqual(code(error), .busy)
+    }
+    do {
+      try await recorder.startRecording()
+      XCTFail("expected busy")
+    } catch {
+      XCTAssertEqual(code(error), .busy)
+    }
+    _ = try await recorder.stopStreaming()
+  }
+
+  func testStreamingUpdateIsEmittedOncePerDistinctText() async throws {
+    let recorder = makeRecorder()
+    try await recorder.startStreaming(request: request)
+    model.session.emit("hello", "wor")
+    model.session.emit("hello", "wor")
+    model.session.emit("hello", "world")
+    XCTAssertEqual(events.streaming, ["hello|wor", "hello|world"])
+    _ = try await recorder.stopStreaming()
+  }
+
+  func testStopStreamingStopsTheSessionAndTranscribesTheAudio() async throws {
+    let recorder = makeRecorder()
+    try await recorder.startStreaming(request: request)
+    model.fakeProcessor.feed([0.7, 0.8])
+    let result = try await recorder.stopStreaming()
+    XCTAssertEqual(result["text"] as? String, "hello")
+    XCTAssertEqual(model.lastSamples, [0.7, 0.8])
+    XCTAssertEqual(model.session.stopCalls, 1)
+    XCTAssertEqual(model.fakeProcessor.stopCalls, 1)
+    XCTAssertEqual(Array(model.fakeProcessor.audioSamples), [])
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+  }
+
+  func testStopStreamingWithNoAudioResolvesEmptyWithoutDecoding() async throws {
+    let recorder = makeRecorder()
+    try await recorder.startStreaming(request: DecodingRequest(language: "en"))
+    let result = try await recorder.stopStreaming()
+    XCTAssertEqual(result["text"] as? String, "")
+    XCTAssertEqual(result["language"] as? String, "en")
+    XCTAssertEqual(model.transcribeCalls, 0)
+  }
+
+  func testStopStreamingWhenIdleIsRecordingFailed() async {
+    let recorder = makeRecorder()
+    do {
+      _ = try await recorder.stopStreaming()
+      XCTFail("expected recording-failed")
+    } catch {
+      XCTAssertEqual(code(error), .recordingFailed)
+    }
+  }
+
+  func testStopWhileAlreadyStoppingIsBusy() async throws {
+    let recorder = makeRecorder()
+    let gate = Gate()
+    model.session.stopGate = gate
+    try await recorder.startStreaming(request: request)
+    let first = Task { try await recorder.stopStreaming() }
+    // The stop gate holds the first call inside the session's stop, so after a short wait the
+    // Recorder is in its ending state.
+    try await Task.sleep(nanoseconds: 100_000_000)
+    do {
+      _ = try await recorder.stopStreaming()
+      XCTFail("expected busy")
+    } catch {
+      XCTAssertEqual(code(error), .busy)
+    }
+    await gate.open()
+    _ = try await first.value
+  }
+
+  func testInterruptKeepsTheAudioAndRequestForALaterStop() async throws {
+    let recorder = makeRecorder()
+    try await recorder.startStreaming(request: request)
+    model.fakeProcessor.feed([0.9])
+    await recorder.interrupt()
+    XCTAssertEqual(model.session.stopCalls, 1)
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+    let result = try await recorder.stopStreaming()
+    XCTAssertEqual(result["text"] as? String, "hello")
+    XCTAssertEqual(model.lastSamples, [0.9])
+  }
+
+  func testCancelStreamingDiscardsKeptAudio() async throws {
+    let recorder = makeRecorder()
+    try await recorder.startStreaming(request: request)
+    model.fakeProcessor.feed([0.9])
+    await recorder.interrupt()
+    await recorder.cancelStreaming()
+    do {
+      _ = try await recorder.stopStreaming()
+      XCTFail("expected recording-failed")
+    } catch {
+      XCTAssertEqual(code(error), .recordingFailed)
+    }
+  }
+
+  func testStartStreamingFailsWhenTheSessionThrows() async {
+    model.session.setBehaviour(.throwError(NSError(domain: "test", code: 3, userInfo: [NSLocalizedDescriptionKey: "no input"])))
+    let recorder = makeRecorder()
+    do {
+      try await recorder.startStreaming(request: request)
+      XCTFail("expected recording-failed")
+    } catch {
+      XCTAssertEqual(code(error), .recordingFailed)
+      XCTAssertEqual((error as? WhisperKitError)?.message, "Could not start the microphone: no input")
+    }
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+  }
+
+  func testSessionFactoryFailureReleasesTheEngine() async {
+    model.setSessionError(WhisperKitError(.loadFailed, "The tokenizer did not load"))
+    let recorder = makeRecorder()
+    do {
+      try await recorder.startStreaming(request: request)
+      XCTFail("expected load-failed")
+    } catch {
+      XCTAssertEqual(code(error), .loadFailed)
+    }
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+  }
+
+  func testInterruptDuringTheLoadAbortsBeforeTheSessionIsMade() async throws {
+    let gate = Gate()
+    loader.gate = gate
+    let recorder = makeRecorder()
+    let start = Task { try await recorder.startStreaming(request: self.request) }
+    let engine = self.engine!
+    await eventually { await engine.isBusy }
+    await recorder.interrupt()
+    await gate.open()
+    try await start.value
+    XCTAssertEqual(model.session.startCalls, 0)
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+    let result = try await recorder.stopStreaming()
+    XCTAssertEqual(result["text"] as? String, "")
+  }
 }
