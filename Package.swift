@@ -27,8 +27,7 @@ let package = Package(
         "whisperkit_version.rb",
         "ExpoWhisperKitModule.swift",
         "ExpoBridge.swift",
-      ],
-      swiftSettings: [.unsafeFlags(["-enable-experimental-feature", "StrictConcurrency"])]
+      ]
     ),
     .testTarget(
       name: "ExpoWhisperKitCoreTests",
