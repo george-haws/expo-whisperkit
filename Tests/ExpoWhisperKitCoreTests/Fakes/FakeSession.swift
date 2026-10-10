@@ -21,6 +21,8 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
   private var behaviour: StartBehaviour = .runUntilStopped
   private var continuation: CheckedContinuation<Void, Never>?
   private var stopRequested = false
+  private var released = false
+  private var _stopEntered = 0
   private var _startCalls = 0
   private var _stopCalls = 0
   private var _onText: StreamingTextCallback?
@@ -28,6 +30,8 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
   var stopGate: Gate?
 
   var startCalls: Int { lock.lock(); defer { lock.unlock() }; return _startCalls }
+  /// Incremented at the top of `stop()`, before it waits on `stopGate`.
+  var stopEntered: Int { lock.lock(); defer { lock.unlock() }; return _stopEntered }
   var stopCalls: Int { lock.lock(); defer { lock.unlock() }; return _stopCalls }
 
   func setBehaviour(_ value: StartBehaviour) { lock.lock(); behaviour = value; lock.unlock() }
@@ -49,6 +53,7 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
   private func park(_ c: CheckedContinuation<Void, Never>, for behaviour: StartBehaviour) -> Bool {
     lock.lock(); defer { lock.unlock() }
     if case .runUntilStopped = behaviour, stopRequested { return false }
+    if case .hangUntilReleased = behaviour, released { return false }
     continuation = c
     return true
   }
@@ -77,7 +82,10 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     }
   }
 
+  private func enterStop() { lock.lock(); _stopEntered += 1; lock.unlock() }
+
   func stop() async {
+    enterStop()
     if let stopGate { await stopGate.wait() }
     finishStop()?.resume()
   }
@@ -85,6 +93,7 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
   /// Ends a `.hangUntilReleased` start.
   func release() {
     lock.lock()
+    released = true
     let resume = continuation
     continuation = nil
     lock.unlock()

@@ -266,9 +266,10 @@ final class RecorderTests: XCTestCase {
     model.session.stopGate = gate
     try await recorder.startStreaming(request: request)
     let first = Task { try await recorder.stopStreaming() }
-    // The stop gate holds the first call inside the session's stop, so after a short wait the
-    // Recorder is in its ending state.
-    try await Task.sleep(nanoseconds: 100_000_000)
+    // The stop gate holds the first call inside the session's stop, so once the session has been
+    // entered the Recorder is in its ending state.
+    let session = model.session
+    await eventually { session.stopEntered == 1 }
     do {
       _ = try await recorder.stopStreaming()
       XCTFail("expected busy")
@@ -276,7 +277,8 @@ final class RecorderTests: XCTestCase {
       XCTAssertEqual(code(error), .busy)
     }
     await gate.open()
-    _ = try await first.value
+    let result = try await first.value
+    XCTAssertEqual(result["text"] as? String, "")
   }
 
   func testInterruptKeepsTheAudioAndRequestForALaterStop() async throws {
@@ -356,5 +358,28 @@ final class RecorderTests: XCTestCase {
     XCTAssertFalse(busy)
     let result = try await recorder.stopStreaming()
     XCTAssertEqual(result["text"] as? String, "")
+  }
+
+  func testCancelDuringTheLoadAbortsAndKeepsNothing() async throws {
+    let gate = Gate()
+    loader.gate = gate
+    let recorder = makeRecorder()
+    let start = Task { try await recorder.startStreaming(request: self.request) }
+    let engine = self.engine!
+    await eventually { await engine.isBusy }
+    await recorder.cancelStreaming()
+    await gate.open()
+    try await start.value
+    XCTAssertEqual(model.session.startCalls, 0)
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+    do {
+      _ = try await recorder.stopStreaming()
+      XCTFail("expected recordingFailed")
+    } catch {
+      XCTAssertEqual(code(error), .recordingFailed)
+    }
   }
 }

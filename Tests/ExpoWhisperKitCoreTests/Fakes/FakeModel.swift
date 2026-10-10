@@ -14,7 +14,8 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
   private var _transcribeCalls = 0
   private var _lastSamples: [Float]?
   private var _lastPath: String?
-  private var _session = FakeSession()
+  private var next = FakeSession()
+  private var handedOut: [FakeSession] = []
   private var sessionError: Error?
   /// When set, `transcribe` waits on it, holding the engine busy.
   var transcribeGate: Gate?
@@ -28,10 +29,13 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
   var transcribeCalls: Int { lock.lock(); defer { lock.unlock() }; return _transcribeCalls }
   var lastSamples: [Float]? { lock.lock(); defer { lock.unlock() }; return _lastSamples }
   var lastPath: String? { lock.lock(); defer { lock.unlock() }; return _lastPath }
-  var session: FakeSession { lock.lock(); defer { lock.unlock() }; return _session }
+  /// The most recently handed-out session, or the preset when none has been handed out yet.
+  var session: FakeSession { lock.lock(); defer { lock.unlock() }; return handedOut.last ?? next }
+  /// Every session `makeStreamingSession` has handed out, oldest first.
+  var sessions: [FakeSession] { lock.lock(); defer { lock.unlock() }; return handedOut }
 
   func setResult(_ value: Result<[TranscriptionResult], Error>) { lock.lock(); result = value; lock.unlock() }
-  func setSession(_ value: FakeSession) { lock.lock(); _session = value; lock.unlock() }
+  func setSession(_ value: FakeSession) { lock.lock(); next = value; lock.unlock() }
   func setSessionError(_ error: Error?) { lock.lock(); sessionError = error; lock.unlock() }
 
   func transcribe(path: String, options: DecodingOptions) async throws -> [TranscriptionResult] {
@@ -56,12 +60,22 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
   private func currentResult() throws -> [TranscriptionResult] { lock.lock(); defer { lock.unlock() }; return try result.get() }
   private func recordUnload() { lock.lock(); _unloads += 1; lock.unlock() }
 
+  /// Hands out the preset session (or the error) and presets a fresh one for the next call.
+  private func takeSession() -> (Error?, FakeSession) {
+    lock.lock(); defer { lock.unlock() }
+    if let sessionError { return (sessionError, next) }
+    let session = next
+    handedOut.append(session)
+    next = FakeSession()
+    return (nil, session)
+  }
+
   func unloadModels() async {
     recordUnload()
   }
 
   func makeStreamingSession(options: DecodingOptions, onText: @escaping StreamingTextCallback) throws -> any StreamingSession {
-    lock.lock(); let error = sessionError; let session = _session; lock.unlock()
+    let (error, session) = takeSession()
     if let error { throw error }
     session.setOnText(onText)
     return session
