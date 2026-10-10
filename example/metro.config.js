@@ -12,6 +12,9 @@ config.resolver.blockList = [
   // On windows the path will resolve with `\`. We need to escape it with `\\` for the RegExp.
   new RegExp(path.resolve('..', 'node_modules', 'react').replace(/\\/g, '\\\\')),
   new RegExp(path.resolve('..', 'node_modules', 'react-native').replace(/\\/g, '\\\\')),
+  // SwiftPM and xcodebuild output from `npm run test:ios`.
+  new RegExp(path.resolve('..', '.build').replace(/\\/g, '\\\\')),
+  new RegExp(path.resolve('..', 'Tests').replace(/\\/g, '\\\\')),
 ];
 
 config.resolver.nodeModulesPaths = [

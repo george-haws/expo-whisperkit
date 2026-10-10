@@ -4,6 +4,7 @@ node_modules/
 # build output (rebuilt by `npm run prepare`)
 /build/
 /plugin/build/
+/.build/
 *.tsbuildinfo
 
 # Expo / Metro

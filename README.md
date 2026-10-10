@@ -113,7 +113,7 @@ A streaming session can also end without any signal reaching JavaScript: an inte
 
 ## Development
 
-- `npm run prepare` builds; `CI=1 npm test` and `CI=1 npm test plugin` run Jest; `npm run lint`.
+- `npm run prepare` builds; `CI=1 npm test` and `CI=1 npm test plugin` run Jest; `npm run test:ios` runs the Swift unit tests on the simulator; `npm run lint`.
 - The example app in `example/` is the test bed; see `CLAUDE.md` for the simulator and Maestro commands.
 
 ## License

@@ -22,6 +22,7 @@
     "clean": "node internal/module_scripts/clean.js",
     "lint": "eslint src/ plugin/src/",
     "test": "node internal/module_scripts/test.js",
+    "test:ios": "node internal/module_scripts/test-ios.js",
     "prepare": "node internal/module_scripts/prepare.js",
     "open:ios": "node internal/module_scripts/open-ios.js"
   },
