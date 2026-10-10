@@ -28,7 +28,7 @@ actor Engine {
     self.emitProgress = emitProgress
   }
 
-  /// The loaded instance, for the streaming session (Task 7).
+  /// The loaded instance, for the streaming session (Task 7). Callers must hold exclusivity; nothing here checks it.
   var current: (any SpeechModel)? { whisperKit }
 
   var isBusy: Bool { busy }

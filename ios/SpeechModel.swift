@@ -47,6 +47,7 @@ enum StreamingText {
 
 // MARK: - WhisperKit conformance
 
+// Safe because Engine's exclusivity serialises every use of the instance: transcribe runs inside exclusiveTranscription, and a streaming session holds exclusivity from beginExclusiveLoad to endStreaming.
 extension WhisperKit: @retroactive @unchecked Sendable {}
 
 extension WhisperKit: SpeechModel {

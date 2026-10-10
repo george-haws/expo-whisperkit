@@ -35,6 +35,8 @@ const args = [
   '-scheme', SCHEME,
   '-destination', `platform=iOS Simulator,id=${simulator}`,
   '-derivedDataPath', path.join(root, '.build', 'xcode'),
+  '-test-timeouts-enabled', 'YES',
+  '-default-test-execution-time-allowance', '60',
   ...process.argv.slice(2),
 ];
 

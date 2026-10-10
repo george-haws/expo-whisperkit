@@ -5,6 +5,7 @@ node_modules/
 /build/
 /plugin/build/
 /.build/
+/.swiftpm/
 *.tsbuildinfo
 
 # Expo / Metro
