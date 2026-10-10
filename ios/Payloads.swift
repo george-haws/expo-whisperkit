@@ -1,14 +1,14 @@
-import ExpoModulesCore
 import Foundation
 import WhisperKit
 
-/// Mirrors `NativeDecodingOptions` in TypeScript: `model` and `download` are always present.
-struct DecodingRequest: Record {
-  @Field var model: String = "base"
-  @Field var language: String? = nil
-  @Field var task: String? = nil
-  @Field var prompt: String? = nil
-  @Field var download: Bool = true
+/// The resolved decoding request. Built from `DecodingRequestRecord` (ExpoBridge.swift), which
+/// mirrors `NativeDecodingOptions` in TypeScript: `model` and `download` are always present.
+struct DecodingRequest: Sendable {
+  var model: String = "base"
+  var language: String? = nil
+  var task: String? = nil
+  var prompt: String? = nil
+  var download: Bool = true
 
   func decodingOptions(tokenizer: (any WhisperTokenizer)?) -> DecodingOptions {
     var options = DecodingOptions(

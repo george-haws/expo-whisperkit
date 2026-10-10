@@ -80,18 +80,18 @@ public class ExpoWhisperKitModule: Module {
 
     AsyncFunction("getModelStatus") { (model: String) async throws -> [String: Any] in
       try await self.bridged(fallback: .loadFailed) {
-        let name = try Self.validated(model)
+        let name = try ModelStore.validated(model)
         let state = await self.engine.status(of: name)
         return ["model": name, "state": state]
       }
     }
 
     AsyncFunction("downloadModel") { (model: String) async throws in
-      try await self.bridged(fallback: .loadFailed) { try await self.engine.download(try Self.validated(model)) }
+      try await self.bridged(fallback: .loadFailed) { try await self.engine.download(try ModelStore.validated(model)) }
     }
 
     AsyncFunction("deleteModel") { (model: String) async throws in
-      try await self.bridged(fallback: .loadFailed) { try await self.engine.delete(try Self.validated(model)) }
+      try await self.bridged(fallback: .loadFailed) { try await self.engine.delete(try ModelStore.validated(model)) }
     }
 
     AsyncFunction("listDownloadedModels") { () async throws -> [String] in
@@ -100,7 +100,7 @@ public class ExpoWhisperKitModule: Module {
 
     AsyncFunction("loadModel") { (model: String) async throws in
       try await self.bridged(fallback: .loadFailed) {
-        try await self.engine.ensureLoaded(try Self.validated(model), download: true)
+        try await self.engine.ensureLoaded(try ModelStore.validated(model), download: true)
       }
     }
 
@@ -110,14 +110,14 @@ public class ExpoWhisperKitModule: Module {
 
     // MARK: Files
 
-    AsyncFunction("transcribeFile") { (uri: String, options: DecodingRequest) async throws -> [String: Any] in
+    AsyncFunction("transcribeFile") { (uri: String, options: DecodingRequestRecord) async throws -> [String: Any] in
       try await self.bridged(fallback: .decodeFailed) {
-        _ = try Self.validated(options.model)
+        _ = try ModelStore.validated(options.model)
         let path = Self.filePath(from: uri)
         guard FileManager.default.fileExists(atPath: path) else {
           throw WhisperKitError(.decodeFailed, "No file at \(path)")
         }
-        return try await self.engine.transcribe(path: path, request: options)
+        return try await self.engine.transcribe(path: path, request: options.request)
       }
     }
 
@@ -135,10 +135,10 @@ public class ExpoWhisperKitModule: Module {
       try await self.bridged(fallback: .recordingFailed) { try await self.recorder.startRecording() }
     }
 
-    AsyncFunction("stopRecording") { (options: DecodingRequest) async throws -> [String: Any] in
+    AsyncFunction("stopRecording") { (options: DecodingRequestRecord) async throws -> [String: Any] in
       try await self.bridged(fallback: .decodeFailed) {
-        _ = try Self.validated(options.model)
-        return try await self.recorder.stopRecording(request: options)
+        _ = try ModelStore.validated(options.model)
+        return try await self.recorder.stopRecording(request: options.request)
       }
     }
 
@@ -148,10 +148,10 @@ public class ExpoWhisperKitModule: Module {
 
     // MARK: Streaming
 
-    AsyncFunction("startStreaming") { (options: DecodingRequest) async throws in
+    AsyncFunction("startStreaming") { (options: DecodingRequestRecord) async throws in
       try await self.bridged(fallback: .recordingFailed) {
-        _ = try Self.validated(options.model)
-        try await self.recorder.startStreaming(request: options)
+        _ = try ModelStore.validated(options.model)
+        try await self.recorder.startStreaming(request: options.request)
       }
     }
 
@@ -178,15 +178,6 @@ public class ExpoWhisperKitModule: Module {
     } catch {
       throw WhisperKitError(fallback, error.localizedDescription, underlying: error).asException()
     }
-  }
-
-  /// Rejects names that would escape or alias the models folder: "" and "." target the folder
-  /// itself, ".." the whole store, and "/" a nested path. Hidden names (leading ".") are refused too.
-  static func validated(_ model: String) throws -> String {
-    if model.isEmpty || model.hasPrefix(".") || model.contains("/") || model.contains("..") {
-      throw WhisperKitError(.modelMissing, "Invalid model name")
-    }
-    return model
   }
 
   static func filePath(from uri: String) -> String {

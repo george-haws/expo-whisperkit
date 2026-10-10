@@ -13,6 +13,15 @@ actor ModelStore {
   let tokenizersDir: URL
   private var downloading: Set<String> = []
 
+  /// Rejects names that would escape or alias the models folder: "" and "." target the folder
+  /// itself, ".." the whole store, and "/" a nested path. Hidden names (leading ".") are refused too.
+  static func validated(_ model: String) throws -> String {
+    if model.isEmpty || model.hasPrefix(".") || model.contains("/") || model.contains("..") {
+      throw WhisperKitError(.modelMissing, "Invalid model name")
+    }
+    return model
+  }
+
   init() {
     let support = (try? FileManager.default.url(
       for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true

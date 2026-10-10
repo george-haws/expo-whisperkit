@@ -1,4 +1,4 @@
-import ExpoModulesCore
+import Foundation
 
 /// The closed set of codes shared with TypeScript (spec §4). `unsupported-platform` never
 /// originates natively.
@@ -25,11 +25,4 @@ struct WhisperKitError: Error, CustomStringConvertible {
   }
 
   var description: String { message }
-
-  /// The Expo exception whose JS `code` is the same string.
-  func asException() -> Exception {
-    let exception = Exception(name: "WhisperKitError", description: message, code: code.rawValue)
-    exception.cause = underlying
-    return exception
-  }
 }
