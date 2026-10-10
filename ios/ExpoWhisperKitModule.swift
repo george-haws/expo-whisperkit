@@ -47,6 +47,9 @@ public class ExpoWhisperKitModule: Module {
         center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] note in
           let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
           guard raw == AVAudioSession.InterruptionType.began.rawValue, let recorder = self?.recorder else { return }
+          // iOS delivers a stale "began" with WasSuspended on resume; it would end a capture
+          // started right after the app returns, so it is ignored.
+          if (note.userInfo?[AVAudioSessionInterruptionWasSuspendedKey] as? Bool) == true { return }
           Task { await recorder.interrupt() }
         },
         center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] _ in

@@ -15,6 +15,11 @@ appId: expo.modules.whisperkit.example
     timeout: 30000
 - tapOn:
     id: "download"
+# The progress indicator renders after the first downloadProgress event (spec §5.1).
+- extendedWaitUntil:
+    visible:
+      id: "progress"
+    timeout: 60000
 - extendedWaitUntil:
     visible:
       id: "status"

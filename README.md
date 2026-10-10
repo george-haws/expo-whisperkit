@@ -92,11 +92,13 @@ The package also exports `DEFAULT_MODEL`, `WhisperKitError`, `ERROR_CODES` and t
 
 ### Errors
 
-Every rejection is a `WhisperKitError` with `code` in: `unsupported-platform`, `model-missing`, `download-failed`, `load-failed`, `permission-denied`, `recording-failed`, `decode-failed`, `busy`, `cancelled`. `busy` means a conflicting operation is running; nothing is queued. Because the set of codes is closed, `load-failed` also covers storage failures in the model-management calls (for example a delete that fails).
+Every rejection is a `WhisperKitError` with `code` in: `unsupported-platform`, `model-missing`, `download-failed`, `load-failed`, `permission-denied`, `recording-failed`, `decode-failed`, `busy`, `cancelled`. `busy` means a conflicting operation is running; nothing is queued. `busy` also covers a model load or prewarm, a download of the same model, or a delete in progress; when `stopRecording` or `stopStreaming` gets `busy`, the captured audio is kept and a retried stop decodes it. Because the set of codes is closed, `load-failed` also covers storage failures in the model-management calls (for example a delete that fails).
 
 Interruptions (calls, Siri, backgrounding) end capture without an error; the audio captured so far is returned by the next `stopRecording` / `stopStreaming`. A memory warning unloads an idle model (`modelState` goes to `present`); the next call reloads it.
 
 A streaming session can also end without any signal reaching JavaScript: an interruption or backgrounding that arrives while the model is still loading, or WhisperKit's capture loop stopping on an internal error. `stopStreaming` then resolves with whatever was captured, possibly empty text, rather than rejecting.
+
+`startStreaming` rejects with `recording-failed` if the microphone cannot be started.
 
 ## Where models live
 

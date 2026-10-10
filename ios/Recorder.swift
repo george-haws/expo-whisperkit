@@ -34,6 +34,12 @@ actor Recorder {
   /// Checked once the load returns, before the microphone starts; `.cancel` wins over `.interrupt`.
   private var streamAbortRequested: StreamAbort?
   enum StreamAbort { case interrupt, cancel }
+  /// The session whose `startStreaming` is still waiting for the microphone to come up. A capture
+  /// loop that throws while this matches the live session is a failed start, not an interruption.
+  private var transcriberAwaitingStart: AudioStreamTranscriber?
+  /// Recorded by `streamingEnded` after it has torn down a session that failed to start; read
+  /// (and cleared) by the `startStreaming` call that owns `transcriber`.
+  private var streamStartError: (transcriber: AudioStreamTranscriber, error: Error)?
 
   init(engine: Engine, emitLevel: @escaping LevelEmitter, emitStreaming: @escaping StreamingEmitter) {
     self.engine = engine
@@ -83,7 +89,10 @@ actor Recorder {
   }
 
   func stopRecording(request: DecodingRequest) async throws -> [String: Any] {
-    // Checked before any audio is taken, so a refused call does not discard the capture.
+    // Guarantee: a call refused with `busy` keeps the captured audio for a retried
+    // `stopRecording`. The in-flight check below runs before any audio is taken, and a `busy`
+    // from the engine (a load, a download of the same model, a file transcription or a delete in
+    // progress) puts the samples back. Other failures, and `cancelRecording`, discard the audio.
     guard stopTask == nil else {
       throw WhisperKitError(.busy, "A stopRecording call is already in flight")
     }
@@ -111,8 +120,19 @@ actor Recorder {
       if task.isCancelled {
         throw WhisperKitError(.cancelled, "Recording was cancelled")
       }
+      if let error = error as? WhisperKitError, error.code == .busy {
+        keepForRetry(samples, streamRequest: nil)
+      }
       throw error
     }
+  }
+
+  /// The engine refused the final decode with `busy`: keep the audio so a retried stop decodes it.
+  /// Skipped if another session has started or kept audio of its own meanwhile.
+  private func keepForRetry(_ samples: [Float], streamRequest: DecodingRequest?) {
+    guard mode == .idle, pendingSamples == nil, streamRequestAfterInterrupt == nil else { return }
+    pendingSamples = samples
+    streamRequestAfterInterrupt = streamRequest
   }
 
   func cancelRecording() {
@@ -249,6 +269,7 @@ actor Recorder {
     streamTranscriber = transcriber
     streamRequest = request
     streamStarting = false
+    transcriberAwaitingStart = transcriber
     // The task is assigned below before this actor can run `streamingEnded`, which needs the actor.
     streamTask = Task { [weak self] in
       do {
@@ -262,6 +283,37 @@ actor Recorder {
     }
     let processor = instance.audioProcessor
     startLevelTask { processor.relativeEnergy.last ?? 0 }
+    try await awaitMicrophone(transcriber, processor as? AudioProcessor)
+  }
+
+  /// WhisperKit starts the microphone inside `streamTask`, so a failure there would otherwise
+  /// surface only as a silent, empty session. Waits up to about one second for the audio engine
+  /// to run or the capture loop to fail; on a failure `streamingEnded` has already released the
+  /// engine and reset the state, so this only rethrows. A timeout proceeds: slow is not failed.
+  private func awaitMicrophone(_ transcriber: AudioStreamTranscriber, _ processor: AudioProcessor?) async throws {
+    defer {
+      if transcriberAwaitingStart === transcriber {
+        transcriberAwaitingStart = nil
+      }
+    }
+    var waited = 0
+    while waited < 20 {
+      if let failure = streamStartError, failure.transcriber === transcriber {
+        streamStartError = nil
+        throw WhisperKitError(
+          .recordingFailed,
+          "Could not start the microphone: \(failure.error.localizedDescription)",
+          underlying: failure.error
+        )
+      }
+      if !streamEnding {
+        // Ended during the wait (an interruption or a stop): that session's own rules apply.
+        if streamTranscriber !== transcriber { return }
+        if processor?.audioEngine?.isRunning == true { return }
+        waited += 1
+      }
+      try? await Task.sleep(nanoseconds: 50_000_000)
+    }
   }
 
   func stopStreaming() async throws -> [String: Any] {
@@ -286,7 +338,12 @@ actor Recorder {
     if samples.isEmpty {
       return ["text": "", "language": request.language ?? "", "segments": [[String: Any]]()]
     }
-    return try await engine.transcribe(samples: samples, request: request)
+    do {
+      return try await engine.transcribe(samples: samples, request: request)
+    } catch let error as WhisperKitError where error.code == .busy {
+      keepForRetry(samples, streamRequest: request)
+      throw error
+    }
   }
 
   /// Interruption while streaming: end the session; the audio and the request are kept so a
@@ -313,14 +370,25 @@ actor Recorder {
 
   /// WhisperKit's capture loop ended on its own: it threw (for example the microphone could not
   /// start) or stopped itself. Ends the session like an interruption, keeping the audio for a later
-  /// `stopStreaming`. A no-op when the Recorder started the stop (`streamEnding`). It runs inside
-  /// `streamTask`, so the task is detached first: `endStreaming` must not await the task it runs in.
+  /// `stopStreaming`, except while `startStreaming` is still waiting for the microphone: a throw
+  /// then is a failed start, recorded for `startStreaming` to reject with, and no audio is kept.
+  /// A no-op when the Recorder started the stop (`streamEnding`). It runs inside `streamTask`, so
+  /// the task is detached first: `endStreaming` must not await the task it runs in.
   private func streamingEnded(_ error: Error?) async {
-    guard isStreamLive else { return }
+    guard isStreamLive, let transcriber = streamTranscriber else { return }
     if let error {
       NSLog("[ExpoWhisperKit] streaming ended with an error: \(error.localizedDescription)")
     }
+    let failedStart = error != nil && transcriberAwaitingStart === transcriber
     streamTask = nil
+    if failedStart {
+      // endStreaming releases the engine's exclusivity (once) and resets the session state.
+      _ = await endStreaming()
+      if let error {
+        streamStartError = (transcriber, error)
+      }
+      return
+    }
     streamRequestAfterInterrupt = streamRequest
     pendingSamples = await endStreaming()
   }

@@ -172,6 +172,37 @@ describe('streaming', () => {
   });
 });
 
+describe('error codes', () => {
+  const known = (code: string) => Object.assign(new Error(code), { code });
+
+  it.each([
+    ['stopRecording', () => api.stopRecording(), 'decode-failed'],
+    ['startStreaming', () => api.startStreaming(), 'recording-failed'],
+    ['stopStreaming', () => api.stopStreaming(), 'decode-failed'],
+    ['downloadModel', () => api.downloadModel(), 'download-failed'],
+    ['deleteModel', () => api.deleteModel('base'), 'load-failed'],
+  ] as const)('%s rewraps an unknown error as %s', async (name, run, code) => {
+    (native[name] as jest.Mock).mockRejectedValue(new Error('unknown'));
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WhisperKitError);
+    expect(err).toMatchObject({ code, message: 'unknown' });
+  });
+
+  it.each([
+    ['startRecording', () => api.startRecording(), 'busy'],
+    ['stopRecording', () => api.stopRecording(), 'cancelled'],
+    ['transcribeFile', () => api.transcribeFile('/a.wav'), 'model-missing'],
+    ['stopStreaming', () => api.stopStreaming(), 'decode-failed'],
+    ['startStreaming', () => api.startStreaming(), 'recording-failed'],
+    ['loadModel', () => api.loadModel(), 'load-failed'],
+  ] as const)('%s passes %s through', async (name, run, code) => {
+    (native[name] as jest.Mock).mockRejectedValue(known(code));
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WhisperKitError);
+    expect(err).toMatchObject({ code, message: code });
+  });
+});
+
 describe('events', () => {
   it('addListener subscribes and remove unsubscribes', () => {
     const fn = jest.fn();
