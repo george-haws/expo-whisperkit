@@ -22,7 +22,7 @@ actor Recorder {
   let emitStreaming: StreamingEmitter
 
   // Streaming state (Task 7).
-  var streamTranscriber: AudioStreamTranscriber?
+  var streamTranscriber: (any StreamingSession)?
   var streamTask: Task<Void, Never>?
   var streamRequest: DecodingRequest?
   /// Set by an interruption while streaming so a later `stopStreaming` can still transcribe the kept audio.
@@ -36,10 +36,10 @@ actor Recorder {
   enum StreamAbort { case interrupt, cancel }
   /// The session whose `startStreaming` is still waiting for the microphone to come up. A capture
   /// loop that throws while this matches the live session is a failed start, not an interruption.
-  private var transcriberAwaitingStart: AudioStreamTranscriber?
+  private var transcriberAwaitingStart: (any StreamingSession)?
   /// Recorded by `streamingEnded` after it has torn down a session that failed to start; read
   /// (and cleared) by the `startStreaming` call that owns `transcriber`.
-  private var streamStartError: (transcriber: AudioStreamTranscriber, error: Error)?
+  private var streamStartError: (transcriber: any StreamingSession, error: Error)?
 
   init(engine: Engine, emitLevel: @escaping LevelEmitter, emitStreaming: @escaping StreamingEmitter) {
     self.engine = engine
@@ -214,7 +214,7 @@ actor Recorder {
     mode = .streaming
     streamStarting = true
     streamAbortRequested = nil
-    let instance: WhisperKit
+    let instance: any SpeechModel
     do {
       instance = try await engine.beginExclusiveLoad(request.model, download: request.download)
     } catch {
@@ -236,46 +236,31 @@ actor Recorder {
       }
       return
     }
-    guard let tokenizer = instance.tokenizer else {
-      await engine.endExclusive()
-      streamStarting = false
-      mode = .idle
-      throw WhisperKitError(.loadFailed, "The tokenizer did not load")
-    }
-
     let dedupe = StreamingDedupe()
     let emit = emitStreaming
-    let placeholder = Self.waitingPlaceholder
-    let transcriber = AudioStreamTranscriber(
-      audioEncoder: instance.audioEncoder,
-      featureExtractor: instance.featureExtractor,
-      segmentSeeker: instance.segmentSeeker,
-      textDecoder: instance.textDecoder,
-      tokenizer: tokenizer,
-      audioProcessor: instance.audioProcessor,
-      decodingOptions: request.decodingOptions(tokenizer: tokenizer),
-      stateChangeCallback: { _, state in
-        let confirmed = state.confirmedSegments.map(\.text).joined()
-          .trimmingCharacters(in: .whitespacesAndNewlines)
-        // WhisperKit fills `currentText` with a placeholder while it waits for voice; it is not text.
-        let current = state.currentText == placeholder ? "" : state.currentText
-        let pending = (state.unconfirmedSegments.map(\.text).joined() + " " + current)
-          .trimmingCharacters(in: .whitespacesAndNewlines)
+    let session: any StreamingSession
+    do {
+      session = try instance.makeStreamingSession(options: request.decodingOptions(tokenizer: instance.tokenizer)) { confirmed, pending in
         if dedupe.changed(confirmed, pending) {
           emit(confirmed, pending)
         }
       }
-    )
-    streamTranscriber = transcriber
+    } catch {
+      await engine.endExclusive()
+      streamStarting = false
+      mode = .idle
+      throw error
+    }
+    streamTranscriber = session
     streamRequest = request
     streamStarting = false
-    transcriberAwaitingStart = transcriber
+    transcriberAwaitingStart = session
     // The task is assigned below before this actor can run `streamingEnded`, which needs the actor.
     streamTask = Task { [weak self] in
       do {
         // Returns normally when WhisperKit's loop stops itself (a decode error, or its own
         // permission re-check failing) as well as after our own `stopStreamTranscription`.
-        try await transcriber.startStreamTranscription()
+        try await session.start()
         await self?.streamingEnded(nil)
       } catch {
         await self?.streamingEnded(error)
@@ -283,14 +268,14 @@ actor Recorder {
     }
     let processor = instance.audioProcessor
     startLevelTask { processor.relativeEnergy.last ?? 0 }
-    try await awaitMicrophone(transcriber, processor as? AudioProcessor)
+    try await awaitMicrophone(session, instance.audioProcessor as? AudioProcessor)
   }
 
   /// WhisperKit starts the microphone inside `streamTask`, so a failure there would otherwise
   /// surface only as a silent, empty session. Waits up to about one second for the audio engine
   /// to run or the capture loop to fail; on a failure `streamingEnded` has already released the
   /// engine and reset the state, so this only rethrows. A timeout proceeds: slow is not failed.
-  private func awaitMicrophone(_ transcriber: AudioStreamTranscriber, _ processor: AudioProcessor?) async throws {
+  private func awaitMicrophone(_ transcriber: any StreamingSession, _ processor: AudioProcessor?) async throws {
     defer {
       if transcriberAwaitingStart === transcriber {
         transcriberAwaitingStart = nil
@@ -408,7 +393,7 @@ actor Recorder {
     streamTask = nil
     streamRequest = nil
     if let transcriber {
-      await transcriber.stopStreamTranscription()
+      await transcriber.stop()
     }
     await task?.value
     stopLevelTask()
@@ -425,10 +410,6 @@ actor Recorder {
     mode = .idle
     return samples
   }
-
-  /// WhisperKit's own placeholder for `currentText`, copied from the `"Waiting for speech..."` strings
-  /// in WhisperKit's `AudioStreamTranscriber.swift` (`transcribeCurrentBuffer`). Update if reworded.
-  static let waitingPlaceholder = "Waiting for speech..."
 }
 
 /// `streamingUpdate` fires only when the text changes (spec §3.4).

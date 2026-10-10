@@ -7,22 +7,29 @@ typealias ProgressEmitter = @Sendable (_ model: String, _ fraction: Double) -> V
 /// Owns at most one `WhisperKit` instance (spec §3.3). Serialises loading and decoding; a
 /// conflicting call gets `busy` instead of waiting.
 actor Engine {
-  let store: ModelStore
-  private var whisperKit: WhisperKit?
+  let store: any ModelStoring
+  private let loader: ModelLoader
+  private var whisperKit: (any SpeechModel)?
   private(set) var loadedModel: String?
   private var busy = false
   private var unloadAfterCurrent = false
   private let emitState: StateEmitter
   private let emitProgress: ProgressEmitter
 
-  init(store: ModelStore, emitState: @escaping StateEmitter, emitProgress: @escaping ProgressEmitter) {
+  init(
+    store: any ModelStoring,
+    loader: @escaping ModelLoader = { config in try await WhisperKit(config) },
+    emitState: @escaping StateEmitter,
+    emitProgress: @escaping ProgressEmitter
+  ) {
     self.store = store
+    self.loader = loader
     self.emitState = emitState
     self.emitProgress = emitProgress
   }
 
   /// The loaded instance, for the streaming session (Task 7).
-  var current: WhisperKit? { whisperKit }
+  var current: (any SpeechModel)? { whisperKit }
 
   var isBusy: Bool { busy }
 
@@ -97,7 +104,7 @@ actor Engine {
   /// Takes exclusivity and loads `model`. On success the instance is returned with exclusivity
   /// STILL HELD: the caller must call `endExclusive()` when done (streaming, Task 7). On failure
   /// exclusivity is released before the error is rethrown.
-  func beginExclusiveLoad(_ model: String, download: Bool) async throws -> WhisperKit {
+  func beginExclusiveLoad(_ model: String, download: Bool) async throws -> any SpeechModel {
     try beginExclusive()
     do {
       return try await loadLocked(model, download: download)
@@ -109,7 +116,7 @@ actor Engine {
 
   /// Downloads if needed, unloads any other model, and loads `model`. The caller must already
   /// hold exclusivity (`beginExclusive`), so nothing here checks or changes `busy`.
-  private func loadLocked(_ model: String, download: Bool) async throws -> WhisperKit {
+  private func loadLocked(_ model: String, download: Bool) async throws -> any SpeechModel {
     if let whisperKit, loadedModel == model {
       return whisperKit
     }
@@ -131,7 +138,7 @@ actor Engine {
       download: false
     )
     do {
-      let instance = try await WhisperKit(config)
+      let instance = try await loader(config)
       whisperKit = instance
       loadedModel = model
       emitState(model, "loaded")
@@ -166,13 +173,13 @@ actor Engine {
 
   func transcribe(path: String, request: DecodingRequest) async throws -> [String: Any] {
     try await exclusiveTranscription(request) { instance in
-      try await instance.transcribe(audioPath: path, decodeOptions: request.decodingOptions(tokenizer: instance.tokenizer))
+      try await instance.transcribe(path: path, options: request.decodingOptions(tokenizer: instance.tokenizer))
     }
   }
 
   func transcribe(samples: [Float], request: DecodingRequest) async throws -> [String: Any] {
     try await exclusiveTranscription(request) { instance in
-      try await instance.transcribe(audioArray: samples, decodeOptions: request.decodingOptions(tokenizer: instance.tokenizer))
+      try await instance.transcribe(samples: samples, options: request.decodingOptions(tokenizer: instance.tokenizer))
     }
   }
 
@@ -198,7 +205,7 @@ actor Engine {
   /// only after decoding finishes. `endExclusive` runs exactly once on every path.
   private func exclusiveTranscription(
     _ request: DecodingRequest,
-    _ body: (WhisperKit) async throws -> [TranscriptionResult]
+    _ body: (any SpeechModel) async throws -> [TranscriptionResult]
   ) async throws -> [String: Any] {
     try beginExclusive()
     let results: [TranscriptionResult]
