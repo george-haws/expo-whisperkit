@@ -47,7 +47,7 @@ enum StreamingText {
 
 // MARK: - WhisperKit conformance
 
-extension WhisperKit: @unchecked Sendable {}
+extension WhisperKit: @retroactive @unchecked Sendable {}
 
 extension WhisperKit: SpeechModel {
   // WhisperKit's own transcribe methods carry defaulted extra parameters, which Swift does not

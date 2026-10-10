@@ -23,9 +23,13 @@ final class LoaderSpy: @unchecked Sendable {
   var error: Error?
   var gate: Gate?
 
+  private func record(_ config: WhisperKitConfig) {
+    lock.lock(); _calls += 1; _configs.append(config); lock.unlock()
+  }
+
   func loader(returning model: FakeModel) -> ExpoWhisperKitCore.ModelLoader {
     { config in
-      self.lock.lock(); self._calls += 1; self._configs.append(config); self.lock.unlock()
+      self.record(config)
       if let gate = self.gate { await gate.wait() }
       if let error = self.error { throw error }
       return model

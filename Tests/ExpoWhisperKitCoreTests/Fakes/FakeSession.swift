@@ -39,11 +39,32 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     callback?(confirmed, pending)
   }
 
-  func start() async throws {
-    lock.lock()
+  private func beginStart() -> StartBehaviour {
+    lock.lock(); defer { lock.unlock() }
     _startCalls += 1
-    let behaviour = self.behaviour
-    lock.unlock()
+    return behaviour
+  }
+
+  /// Returns false when the continuation must be resumed at once (a stop already landed).
+  private func park(_ c: CheckedContinuation<Void, Never>, for behaviour: StartBehaviour) -> Bool {
+    lock.lock(); defer { lock.unlock() }
+    if case .runUntilStopped = behaviour, stopRequested { return false }
+    continuation = c
+    return true
+  }
+
+  private func finishStop() -> CheckedContinuation<Void, Never>? {
+    lock.lock(); defer { lock.unlock() }
+    _stopCalls += 1
+    stopRequested = true
+    guard case .runUntilStopped = behaviour else { return nil }
+    let resume = continuation
+    continuation = nil
+    return resume
+  }
+
+  func start() async throws {
+    let behaviour = beginStart()
     switch behaviour {
     case .returnAtOnce:
       return
@@ -51,30 +72,14 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
       throw error
     case .runUntilStopped, .hangUntilReleased:
       await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-        lock.lock()
-        if case .runUntilStopped = behaviour, stopRequested {
-          lock.unlock()
-          c.resume()
-          return
-        }
-        continuation = c
-        lock.unlock()
+        if !park(c, for: behaviour) { c.resume() }
       }
     }
   }
 
   func stop() async {
     if let stopGate { await stopGate.wait() }
-    lock.lock()
-    _stopCalls += 1
-    stopRequested = true
-    var resume: CheckedContinuation<Void, Never>?
-    if case .runUntilStopped = behaviour {
-      resume = continuation
-      continuation = nil
-    }
-    lock.unlock()
-    resume?.resume()
+    finishStop()?.resume()
   }
 
   /// Ends a `.hangUntilReleased` start.

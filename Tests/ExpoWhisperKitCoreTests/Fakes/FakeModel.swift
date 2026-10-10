@@ -35,24 +35,29 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
   func setSessionError(_ error: Error?) { lock.lock(); sessionError = error; lock.unlock() }
 
   func transcribe(path: String, options: DecodingOptions) async throws -> [TranscriptionResult] {
-    lock.lock(); _lastPath = path; lock.unlock()
+    record(path: path)
     return try await run()
   }
 
   func transcribe(samples: [Float], options: DecodingOptions) async throws -> [TranscriptionResult] {
-    lock.lock(); _lastSamples = samples; lock.unlock()
+    record(samples: samples)
     return try await run()
   }
 
   private func run() async throws -> [TranscriptionResult] {
-    lock.lock(); _transcribeCalls += 1; let gate = transcribeGate; lock.unlock()
+    let gate = beginRun()
     if let gate { await gate.wait() }
-    lock.lock(); defer { lock.unlock() }
-    return try result.get()
+    return try currentResult()
   }
 
+  private func record(path: String) { lock.lock(); _lastPath = path; lock.unlock() }
+  private func record(samples: [Float]) { lock.lock(); _lastSamples = samples; lock.unlock() }
+  private func beginRun() -> Gate? { lock.lock(); defer { lock.unlock() }; _transcribeCalls += 1; return transcribeGate }
+  private func currentResult() throws -> [TranscriptionResult] { lock.lock(); defer { lock.unlock() }; return try result.get() }
+  private func recordUnload() { lock.lock(); _unloads += 1; lock.unlock() }
+
   func unloadModels() async {
-    lock.lock(); _unloads += 1; lock.unlock()
+    recordUnload()
   }
 
   func makeStreamingSession(options: DecodingOptions, onText: @escaping StreamingTextCallback) throws -> any StreamingSession {
