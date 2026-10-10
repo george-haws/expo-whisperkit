@@ -13,7 +13,9 @@ actor Recorder {
 
   private(set) var mode: Mode = .idle
   private let engine: Engine
-  private let processor = AudioProcessor()
+  /// Push-to-talk capture. Streaming uses the loaded model's own processor instead.
+  private let processor: any AudioProcessing
+  private let permission: @Sendable () -> String
   /// Audio captured before an interruption or backgrounding, handed to the next `stopRecording`.
   private var pendingSamples: [Float]?
   private var levelTask: Task<Void, Never>?
@@ -41,8 +43,16 @@ actor Recorder {
   /// (and cleared) by the `startStreaming` call that owns `transcriber`.
   private var streamStartError: (transcriber: any StreamingSession, error: Error)?
 
-  init(engine: Engine, emitLevel: @escaping LevelEmitter, emitStreaming: @escaping StreamingEmitter) {
+  init(
+    engine: Engine,
+    processor: any AudioProcessing = AudioProcessor(),
+    permission: @escaping @Sendable () -> String = { Recorder.permissionStatus() },
+    emitLevel: @escaping LevelEmitter,
+    emitStreaming: @escaping StreamingEmitter
+  ) {
     self.engine = engine
+    self.processor = processor
+    self.permission = permission
     self.emitLevel = emitLevel
     self.emitStreaming = emitStreaming
   }
@@ -71,13 +81,13 @@ actor Recorder {
     guard mode == .idle else {
       throw WhisperKitError(.busy, "A capture session is already active")
     }
-    guard Self.permissionStatus() == "granted" else {
+    guard permission() == "granted" else {
       throw WhisperKitError(.permissionDenied, "Microphone permission has not been granted")
     }
     pendingSamples = nil
     streamRequestAfterInterrupt = nil
     do {
-      try processor.startRecordingLive(callback: nil)
+      try processor.startRecordingLive(inputDeviceID: nil, callback: nil)
     } catch {
       processor.stopRecording()
       deactivateSession()
@@ -205,7 +215,7 @@ actor Recorder {
     guard mode == .idle else {
       throw WhisperKitError(.busy, "A capture session is already active")
     }
-    guard Self.permissionStatus() == "granted" else {
+    guard permission() == "granted" else {
       throw WhisperKitError(.permissionDenied, "Microphone permission has not been granted")
     }
     pendingSamples = nil
