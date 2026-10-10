@@ -1,12 +1,23 @@
 import Foundation
 import WhisperKit
 
+/// The store calls Engine makes, so tests can substitute an in-memory store.
+protocol ModelStoring: Actor {
+  var tokenizersDir: URL { get }
+  func finalFolder(for model: String) -> URL
+  func isPresent(_ model: String) -> Bool
+  func isDownloading(_ model: String) -> Bool
+  func listPresent() -> [String]
+  func delete(_ model: String) throws
+  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL
+}
+
 /// Where models live and how they get there (spec §3.3).
 ///
 ///   <Application Support>/expo-whisperkit/models/<name>     final, "present"
 ///   <Application Support>/expo-whisperkit/downloads/<name>  in flight, cleared on launch and failure
 ///   <Application Support>/expo-whisperkit/tokenizers        WhisperKit's tokenizer cache, so loads work offline
-actor ModelStore {
+actor ModelStore: ModelStoring {
   let root: URL
   let modelsDir: URL
   let downloadsDir: URL
@@ -26,7 +37,12 @@ actor ModelStore {
     let support = (try? FileManager.default.url(
       for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
     )) ?? FileManager.default.temporaryDirectory
-    root = support.appendingPathComponent("expo-whisperkit", isDirectory: true)
+    self.init(root: support.appendingPathComponent("expo-whisperkit", isDirectory: true))
+  }
+
+  /// `root` is the `expo-whisperkit` folder itself; tests pass a temp folder.
+  init(root: URL) {
+    self.root = root
     modelsDir = root.appendingPathComponent("models", isDirectory: true)
     downloadsDir = root.appendingPathComponent("downloads", isDirectory: true)
     tokenizersDir = root.appendingPathComponent("tokenizers", isDirectory: true)
