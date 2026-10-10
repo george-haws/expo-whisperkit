@@ -163,7 +163,8 @@ final class EngineTests: XCTestCase {
     model.transcribeGate = gate
     let engine = self.engine!
     let first = Task { try await engine.transcribe(samples: [0.1], request: self.request) }
-    await eventually { await engine.isBusy }
+    let model = self.model!
+    await eventually { model.transcribeCalls == 1 }
     do {
       _ = try await engine.transcribe(samples: [0.2], request: request)
       XCTFail("expected busy")
@@ -181,7 +182,8 @@ final class EngineTests: XCTestCase {
     model.transcribeGate = gate
     let engine = self.engine!
     let first = Task { try await engine.transcribe(samples: [0.1], request: self.request) }
-    await eventually { await engine.isBusy }
+    let model = self.model!
+    await eventually { model.transcribeCalls == 1 }
     await engine.unload()
     XCTAssertEqual(model.unloads, 0)
     let stillLoaded = await engine.loadedModel
