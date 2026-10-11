@@ -28,6 +28,16 @@ final class AudioInterruptionTests: XCTestCase {
     XCTAssertFalse(AudioInterruption.shouldInterrupt(userInfo: [AVAudioSessionInterruptionTypeKey: ended]))
   }
 
+  func testNSNumberPayloadBridges() {
+    XCTAssertTrue(AudioInterruption.shouldInterrupt(userInfo: [
+      AVAudioSessionInterruptionTypeKey: NSNumber(value: began),
+    ]))
+    XCTAssertFalse(AudioInterruption.shouldInterrupt(userInfo: [
+      AVAudioSessionInterruptionTypeKey: NSNumber(value: began),
+      AVAudioSessionInterruptionReasonKey: NSNumber(value: AudioInterruption.appWasSuspendedReason),
+    ]))
+  }
+
   func testMissingPayloadDoesNotInterrupt() {
     XCTAssertFalse(AudioInterruption.shouldInterrupt(userInfo: nil))
     XCTAssertFalse(AudioInterruption.shouldInterrupt(userInfo: [:]))

@@ -445,9 +445,12 @@ final class StreamingDedupe: @unchecked Sendable {
 
 /// Which `AVAudioSession.interruptionNotification` payloads end a capture (spec §3.3).
 enum AudioInterruption {
-  /// `AVAudioSession.InterruptionReason.appWasSuspended.rawValue`. The case is deprecated from
-  /// iOS 16 (the system no longer sends it), so the raw value is spelled out rather than
-  /// referencing the symbol; on earlier systems the notification still carries it.
+  /// `AVAudioSession.InterruptionReason.appWasSuspended.rawValue` (AVAudioSessionTypes.h:
+  /// `AVAudioSessionInterruptionReasonAppWasSuspended = 1`, deprecated iOS 14.5 to 16). The symbol is
+  /// deprecated, so the raw value is spelled out. iOS 16 and later are documented not to send this
+  /// reason; the guard stays so a stale "began" on resume can never end a fresh capture if a system
+  /// still delivers it. Whether iOS 16+ delivers a stale "began" with the default reason instead is a
+  /// device check (verification sheet).
   static let appWasSuspendedReason: UInt = 1
 
   /// True for a `began` interruption, except one delivered on resume because the app had been
