@@ -270,7 +270,7 @@ actor Recorder {
       do {
         // Returns normally when WhisperKit's loop stops itself (a decode error, or its own
         // permission re-check failing) as well as after our own `stopStreamTranscription`.
-        try await session.start()
+        try await session.start(onCapturing: {})
         await self?.streamingEnded(nil)
       } catch {
         await self?.streamingEnded(error)

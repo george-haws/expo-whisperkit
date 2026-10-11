@@ -26,6 +26,7 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
   private var _startCalls = 0
   private var _stopCalls = 0
   private var _onText: StreamingTextCallback?
+  private var _onCapturing: (@Sendable () -> Void)?
   /// When set, `stop()` waits on it before returning, to hold the Recorder in its ending state.
   var stopGate: Gate?
 
@@ -43,9 +44,16 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     callback?(confirmed, pending)
   }
 
-  private func beginStart() -> StartBehaviour {
+  /// Reports the microphone as up, as the production wrapper does when `startRecordingLive` returns.
+  func capture() {
+    lock.lock(); let callback = _onCapturing; lock.unlock()
+    callback?()
+  }
+
+  private func beginStart(_ onCapturing: @escaping @Sendable () -> Void) -> StartBehaviour {
     lock.lock(); defer { lock.unlock() }
     _startCalls += 1
+    _onCapturing = onCapturing
     return behaviour
   }
 
@@ -68,8 +76,8 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     return resume
   }
 
-  func start() async throws {
-    let behaviour = beginStart()
+  func start(onCapturing: @escaping @Sendable () -> Void) async throws {
+    let behaviour = beginStart(onCapturing)
     switch behaviour {
     case .returnAtOnce:
       return
