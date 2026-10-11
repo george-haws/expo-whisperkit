@@ -4,8 +4,7 @@ import WhisperKit
 typealias StateEmitter = @Sendable (_ model: String, _ state: String) -> Void
 typealias ProgressEmitter = @Sendable (_ model: String, _ fraction: Double) -> Void
 
-/// Owns at most one `WhisperKit` instance (spec §3.3). Serialises loading and decoding; a
-/// conflicting call gets `busy` instead of waiting.
+/// Owns at most one WhisperKit instance (spec §3.3). Serialises loading, decoding and the validating load of a download; a conflicting user-facing call gets busy instead of waiting, a download's validating load waits.
 actor Engine {
   let store: any ModelStoring
   private let loader: ModelLoader
@@ -13,6 +12,8 @@ actor Engine {
   private(set) var loadedModel: String?
   private var busy = false
   private var unloadAfterCurrent = false
+  /// Downloads waiting for exclusivity (see `awaitExclusive`).
+  private var exclusiveWaiters: [CheckedContinuation<Void, Never>] = []
   private let emitState: StateEmitter
   private let emitProgress: ProgressEmitter
 
@@ -43,10 +44,27 @@ actor Engine {
     return await store.isPresent(model) ? "present" : "absent"
   }
 
+  /// Downloads `model`, validates it with a first load (which also caches the tokenizer), and
+  /// moves it into place. The fetch runs without exclusivity so a download never blocks
+  /// push-to-talk; the first load needs exclusivity so at most one WhisperKit instance exists,
+  /// and waits for a running operation instead of throwing a finished download away with `busy`.
   func download(_ model: String) async throws {
     if await store.isPresent(model) {
       return
     }
+    let staging = try await fetch(model)
+    await awaitExclusive()
+    do {
+      try await validateAndCommitLocked(model, staging: staging)
+    } catch {
+      await endExclusive()
+      throw error
+    }
+    await endExclusive()
+  }
+
+  /// The network part of a download. Emits `downloading` first and `absent` on failure.
+  private func fetch(_ model: String) async throws -> URL {
     // Refuse a second download before emitting anything, so listeners never see a false "absent".
     if await store.isDownloading(model) {
       throw WhisperKitError(.busy, "Model \(model) is already downloading")
@@ -54,14 +72,39 @@ actor Engine {
     emitState(model, "downloading")
     do {
       let emitProgress = self.emitProgress
-      _ = try await store.download(model) { fraction in emitProgress(model, fraction) }
-      emitState(model, "present")
+      return try await store.download(model) { fraction in emitProgress(model, fraction) }
     } catch let error as WhisperKitError where error.code == .busy {
       // Another download of this model won the race; its own events describe the state.
       throw error
     } catch {
       emitState(model, "absent")
       throw error
+    }
+  }
+
+  /// The first load of a downloaded model, from its staging folder, then the move into place.
+  /// Unloads whatever is loaded first so only the probe instance exists. The caller holds
+  /// exclusivity. On failure the staging folder is discarded and the error is `download-failed`.
+  private func validateAndCommitLocked(_ model: String, staging: URL) async throws {
+    await unloadNow()
+    let config = WhisperKitConfig(
+      modelFolder: staging.path,
+      tokenizerFolder: await store.tokenizersDir,
+      verbose: false,
+      logLevel: .error,
+      prewarm: false,
+      load: true,
+      download: false
+    )
+    do {
+      let probe = try await loader(config)
+      await probe.unloadModels()
+      try await store.commit(model)
+      emitState(model, "present")
+    } catch {
+      await store.discard(model)
+      emitState(model, "absent")
+      throw WhisperKitError(.downloadFailed, "Downloading \(model) failed: \(error.localizedDescription)", underlying: error)
     }
   }
 
@@ -124,7 +167,8 @@ actor Engine {
       guard download else {
         throw WhisperKitError(.modelMissing, "Model \(model) is not downloaded")
       }
-      try await self.download(model)
+      let staging = try await fetch(model)
+      try await validateAndCommitLocked(model, staging: staging)
     }
     await unloadNow()
     let folder = await store.finalFolder(for: model)
@@ -144,8 +188,8 @@ actor Engine {
       emitState(model, "loaded")
       return instance
     } catch {
-      try? await store.delete(model)
-      emitState(model, "absent")
+      // A present model loaded once at download time; a failure now is environmental (memory
+      // pressure, a compile cache), so the files are kept and the state is unchanged.
       throw WhisperKitError(.loadFailed, "Loading \(model) failed: \(error.localizedDescription)", underlying: error)
     }
   }
@@ -192,11 +236,27 @@ actor Engine {
     busy = true
   }
 
-  /// Runs any deferred unload first and releases `busy` only after it completes.
+  /// Takes exclusivity, waiting for the current operation to end instead of failing with `busy`.
+  /// Only downloads use it (their validating load must not fail a finished download); every
+  /// user-facing call keeps `beginExclusive`'s immediate `busy`. Returns with exclusivity held:
+  /// `endExclusive` hands it over to the first waiter without clearing `busy` in between.
+  private func awaitExclusive() async {
+    if !busy {
+      busy = true
+      return
+    }
+    await withCheckedContinuation { exclusiveWaiters.append($0) }
+  }
+
+  /// Runs any deferred unload first, then hands exclusivity to a waiting download, or releases it.
   func endExclusive() async {
     while unloadAfterCurrent {
       unloadAfterCurrent = false
       await unloadNow()
+    }
+    if !exclusiveWaiters.isEmpty {
+      exclusiveWaiters.removeFirst().resume()
+      return
     }
     busy = false
   }

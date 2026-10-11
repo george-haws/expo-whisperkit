@@ -9,7 +9,13 @@ protocol ModelStoring: Actor {
   func isDownloading(_ model: String) -> Bool
   func listPresent() -> [String]
   func delete(_ model: String) throws
+  /// Fetches the files into a staging folder and returns it. The model stays "downloading"
+  /// until `commit` or `discard`; the caller validates the files (a first load) in between.
   func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL
+  /// Moves the staged folder into place: the model is present and no longer downloading.
+  func commit(_ model: String) throws
+  /// Removes the staged folder: the model is absent and no longer downloading.
+  func discard(_ model: String)
 }
 
 /// Where models live and how they get there (spec §3.3).
@@ -23,6 +29,7 @@ actor ModelStore: ModelStoring {
   let downloadsDir: URL
   let tokenizersDir: URL
   private var downloading: Set<String> = []
+  private var staging: [String: URL] = [:]
 
   /// Names are limited to `A-Z a-z 0-9 . _ -`, which covers every WhisperKit variant name. The
   /// empty name and "." target the models folder itself, ".." the whole store, so they and any
@@ -87,8 +94,9 @@ actor ModelStore: ModelStoring {
     }
   }
 
-  /// Downloads `model`, performs one load (validates the files and caches the tokenizer), then
-  /// moves the folder into place. Returns the final folder.
+  /// Downloads `model` into the staging area. The first load that validates the files and caches
+  /// the tokenizer is the Engine's job, under its exclusivity, so at most one WhisperKit instance
+  /// exists at a time; `commit` then moves the folder into place.
   func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
     if isPresent(model) {
       return finalFolder(for: model)
@@ -97,11 +105,8 @@ actor ModelStore: ModelStoring {
       throw WhisperKitError(.busy, "Model \(model) is already downloading")
     }
     downloading.insert(model)
-    defer { downloading.remove(model) }
-
     let base = downloadsDir.appendingPathComponent(model, isDirectory: true)
     try? FileManager.default.removeItem(at: base)
-
     do {
       try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
       let folder = try await WhisperKit.download(
@@ -110,30 +115,42 @@ actor ModelStore: ModelStoring {
         progressCallback: { p in progress(p.fractionCompleted) }
       )
       progress(1)
-      // First load. If this throws the files are unusable; the caller sees download-failed.
-      let config = WhisperKitConfig(
-        modelFolder: folder.path,
-        tokenizerFolder: tokenizersDir,
-        verbose: false,
-        logLevel: .error,
-        prewarm: false,
-        load: true,
-        download: false
-      )
-      let probe = try await WhisperKit(config)
-      await probe.unloadModels()
-
-      let final = finalFolder(for: model)
-      try? FileManager.default.removeItem(at: final)
-      try FileManager.default.moveItem(at: folder, to: final)
-      try? FileManager.default.removeItem(at: base)
-      return final
+      staging[model] = folder
+      return folder
     } catch let error as WhisperKitError {
-      try? FileManager.default.removeItem(at: base)
+      discard(model)
       throw error
     } catch {
-      try? FileManager.default.removeItem(at: base)
+      discard(model)
       throw WhisperKitError(.downloadFailed, "Downloading \(model) failed: \(error.localizedDescription)", underlying: error)
     }
+  }
+
+  /// Records a staged folder for `model` (what `download` does after the fetch). Internal so a
+  /// test can stage a folder without the network.
+  func stage(_ model: String, folder: URL) {
+    downloading.insert(model)
+    staging[model] = folder
+  }
+
+  func commit(_ model: String) throws {
+    defer {
+      downloading.remove(model)
+      staging[model] = nil
+    }
+    guard let folder = staging[model] else {
+      if isPresent(model) { return }
+      throw WhisperKitError(.downloadFailed, "Downloading \(model) failed: nothing was staged")
+    }
+    let final = finalFolder(for: model)
+    try? FileManager.default.removeItem(at: final)
+    try FileManager.default.moveItem(at: folder, to: final)
+    try? FileManager.default.removeItem(at: downloadsDir.appendingPathComponent(model, isDirectory: true))
+  }
+
+  func discard(_ model: String) {
+    downloading.remove(model)
+    staging[model] = nil
+    try? FileManager.default.removeItem(at: downloadsDir.appendingPathComponent(model, isDirectory: true))
   }
 }

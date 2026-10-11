@@ -75,6 +75,53 @@ final class ModelStoreTests: XCTestCase {
     try await store.delete("base")
   }
 
+  func testCommitMovesTheStagedFolderIntoPlace() async throws {
+    let store = ModelStore(root: root)
+    let staged = try makeFolder("downloads/base/nested/base")
+    FileManager.default.createFile(atPath: staged.appendingPathComponent("config.json").path, contents: Data())
+    await store.stage("base", folder: staged)
+    let downloading = await store.isDownloading("base")
+    XCTAssertTrue(downloading)
+    try await store.commit("base")
+    XCTAssertTrue(isDirectory(root.appendingPathComponent("models/base")))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("models/base/config.json").path))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("downloads/base").path))
+    let stillDownloading = await store.isDownloading("base")
+    XCTAssertFalse(stillDownloading)
+    let present = await store.isPresent("base")
+    XCTAssertTrue(present)
+  }
+
+  func testDiscardRemovesTheStagingFolder() async throws {
+    let store = ModelStore(root: root)
+    let staged = try makeFolder("downloads/base/nested/base")
+    await store.stage("base", folder: staged)
+    await store.discard("base")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("downloads/base").path))
+    let downloading = await store.isDownloading("base")
+    XCTAssertFalse(downloading)
+    let present = await store.isPresent("base")
+    XCTAssertFalse(present)
+  }
+
+  func testCommitWithNothingStagedToleratesAPresentModel() async throws {
+    let store = ModelStore(root: root)
+    _ = try makeFolder("models/base")
+    try await store.commit("base")
+    let present = await store.isPresent("base")
+    XCTAssertTrue(present)
+  }
+
+  func testCommitWithNothingStagedAndNothingPresentIsDownloadFailed() async {
+    let store = ModelStore(root: root)
+    do {
+      try await store.commit("base")
+      XCTFail("expected download-failed")
+    } catch {
+      XCTAssertEqual((error as? WhisperKitError)?.code, .downloadFailed)
+    }
+  }
+
   func testFreshStoreIsNotDownloading() async {
     let store = ModelStore(root: root)
     let downloading = await store.isDownloading("base")

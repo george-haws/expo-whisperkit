@@ -111,8 +111,16 @@ final class EngineTests: XCTestCase {
     _ = try await engine.transcribe(samples: [0.1], request: request)
     let downloads = await store.downloads
     XCTAssertEqual(downloads, ["base"])
+    let committed = await store.committed
+    XCTAssertEqual(committed, ["base"])
     XCTAssertEqual(events.states, ["base:downloading", "base:present", "base:loaded"])
     XCTAssertEqual(events.progress, [0.5, 1])
+    // The probe loads from staging without prewarm; the real load from the final folder with it.
+    XCTAssertEqual(loader.calls, 2)
+    XCTAssertEqual(loader.configs[0].modelFolder, "/fake/downloads/base")
+    XCTAssertEqual(loader.configs[0].prewarm, false)
+    XCTAssertEqual(loader.configs[1].modelFolder, "/fake/models/base")
+    XCTAssertEqual(loader.configs[1].prewarm, true)
   }
 
   func testTranscribeWithoutDownloadIsModelMissing() async {
@@ -128,18 +136,22 @@ final class EngineTests: XCTestCase {
     XCTAssertFalse(busy)
   }
 
-  func testLoadFailureDeletesTheModelAndEmitsAbsent() async {
-    loader.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "corrupt"])
+  func testLoadFailureKeepsThePresentModelAndEmitsNothing() async {
+    // Finding 7: a present model loaded once at download time, so a later failure is
+    // environmental (memory pressure), not a corrupt file. The files stay.
+    loader.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "out of memory"])
     do {
       _ = try await engine.transcribe(samples: [0.1], request: request)
       XCTFail("expected load-failed")
     } catch {
       XCTAssertEqual(code(error), .loadFailed)
-      XCTAssertEqual((error as? WhisperKitError)?.message, "Loading base failed: corrupt")
+      XCTAssertEqual((error as? WhisperKitError)?.message, "Loading base failed: out of memory")
     }
     let deleted = await store.deleted
-    XCTAssertEqual(deleted, ["base"])
-    XCTAssertEqual(events.states, ["base:absent"])
+    XCTAssertEqual(deleted, [])
+    XCTAssertEqual(events.states, [])
+    let status = await engine.status(of: "base")
+    XCTAssertEqual(status, "present")
     let busy = await engine.isBusy
     XCTAssertFalse(busy)
   }
@@ -229,11 +241,19 @@ final class EngineTests: XCTestCase {
 
   // MARK: Download, delete, status
 
-  func testDownloadEmitsDownloadingThenPresent() async throws {
+  func testDownloadEmitsDownloadingThenPresentAndProbesOnce() async throws {
     await store.setPresent([])
     try await engine.download("base")
     XCTAssertEqual(events.states, ["base:downloading", "base:present"])
-    XCTAssertEqual(loader.calls, 0)
+    XCTAssertEqual(loader.calls, 1)
+    XCTAssertEqual(loader.configs[0].modelFolder, "/fake/downloads/base")
+    XCTAssertEqual(model.unloads, 1, "the probe instance is unloaded after validating")
+    let committed = await store.committed
+    XCTAssertEqual(committed, ["base"])
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+    let loaded = await engine.loadedModel
+    XCTAssertNil(loaded)
   }
 
   func testDownloadOfAPresentModelEmitsNothing() async throws {
@@ -265,6 +285,70 @@ final class EngineTests: XCTestCase {
       XCTAssertEqual(code(error), .downloadFailed)
     }
     XCTAssertEqual(events.states, ["base:downloading", "base:absent"])
+  }
+
+  func testProbeFailureDiscardsTheStagingFolderAndIsDownloadFailed() async {
+    await store.setPresent([])
+    loader.error = NSError(domain: "test", code: 5, userInfo: [NSLocalizedDescriptionKey: "corrupt"])
+    do {
+      try await engine.download("base")
+      XCTFail("expected download-failed")
+    } catch {
+      XCTAssertEqual(code(error), .downloadFailed)
+      XCTAssertEqual((error as? WhisperKitError)?.message, "Downloading base failed: corrupt")
+    }
+    let discarded = await store.discarded
+    XCTAssertEqual(discarded, ["base"])
+    let committed = await store.committed
+    XCTAssertEqual(committed, [])
+    XCTAssertEqual(events.states, ["base:downloading", "base:absent"])
+    let present = await store.isPresent("base")
+    XCTAssertFalse(present)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+  }
+
+  func testDownloadUnloadsTheLoadedModelBeforeTheProbe() async throws {
+    // Finding 6: never two instances. The loaded model is unloaded before the probe load.
+    await store.setPresent(["tiny"])
+    try await engine.ensureLoaded("tiny", download: false)
+    XCTAssertEqual(model.unloads, 0)
+    try await engine.download("base")
+    XCTAssertEqual(model.unloads, 2, "the loaded model, then the probe")
+    XCTAssertEqual(events.states, ["tiny:loaded", "base:downloading", "tiny:present", "base:present"])
+    let loaded = await engine.loadedModel
+    XCTAssertNil(loaded)
+  }
+
+  func testDownloadWaitsForARunningTranscriptionInsteadOfFailingBusy() async throws {
+    // Finding 6: the validating load needs exclusivity, and a finished download must not be
+    // thrown away with `busy`, so the download waits for the running operation.
+    await store.setPresent(["tiny"])
+    let gate = Gate()
+    model.transcribeGate = gate
+    let engine = self.engine!
+    let decode = Task { try await engine.transcribe(samples: [0.1], request: DecodingRequest(model: "tiny")) }
+    let model = self.model!
+    await eventually { model.transcribeCalls == 1 }
+    let downloaded = Flag()
+    let download = Task {
+      try await engine.download("base")
+      downloaded.set()
+    }
+    let store = self.store!
+    await eventually { await store.isDownloading("base") }
+    try await Task.sleep(nanoseconds: 100_000_000)
+    XCTAssertFalse(downloaded.isSet, "the probe waits for the decode")
+    let committedEarly = await store.committed
+    XCTAssertEqual(committedEarly, [])
+    await gate.open()
+    _ = try await decode.value
+    try await download.value
+    let committed = await store.committed
+    XCTAssertEqual(committed, ["base"])
+    XCTAssertEqual(events.states, ["tiny:loaded", "base:downloading", "tiny:present", "base:present"])
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
   }
 
   func testDeleteOfTheLoadedModelUnloadsFirst() async throws {

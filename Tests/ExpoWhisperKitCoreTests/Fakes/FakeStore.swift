@@ -1,13 +1,16 @@
 import Foundation
 @testable import ExpoWhisperKitCore
 
-/// In-memory ModelStoring. `download` succeeds and marks the model present unless an error is set.
+/// In-memory ModelStoring with the staging model: `download` succeeds into a staging folder and
+/// marks the model downloading; `commit` makes it present; `discard` drops it.
 actor FakeStore: ModelStoring {
   let tokenizersDir = URL(fileURLWithPath: "/fake/tokenizers", isDirectory: true)
   private(set) var present: Set<String> = []
   private(set) var downloading: Set<String> = []
   private(set) var deleted: [String] = []
   private(set) var downloads: [String] = []
+  private(set) var committed: [String] = []
+  private(set) var discarded: [String] = []
   private var downloadError: Error?
 
   func setPresent(_ models: Set<String>) { present = models }
@@ -16,6 +19,10 @@ actor FakeStore: ModelStoring {
 
   func finalFolder(for model: String) -> URL {
     URL(fileURLWithPath: "/fake/models/\(model)", isDirectory: true)
+  }
+
+  func stagingFolder(for model: String) -> URL {
+    URL(fileURLWithPath: "/fake/downloads/\(model)", isDirectory: true)
   }
 
   func isPresent(_ model: String) -> Bool { present.contains(model) }
@@ -30,9 +37,20 @@ actor FakeStore: ModelStoring {
   func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
     downloads.append(model)
     if let downloadError { throw downloadError }
+    downloading.insert(model)
     progress(0.5)
     progress(1)
+    return stagingFolder(for: model)
+  }
+
+  func commit(_ model: String) throws {
+    committed.append(model)
+    downloading.remove(model)
     present.insert(model)
-    return finalFolder(for: model)
+  }
+
+  func discard(_ model: String) {
+    discarded.append(model)
+    downloading.remove(model)
   }
 }
