@@ -24,10 +24,15 @@ actor ModelStore: ModelStoring {
   let tokenizersDir: URL
   private var downloading: Set<String> = []
 
-  /// Rejects names that would escape or alias the models folder: "" and "." target the folder
-  /// itself, ".." the whole store, and "/" a nested path. Hidden names (leading ".") are refused too.
+  /// Names are limited to `A-Z a-z 0-9 . _ -`, which covers every WhisperKit variant name. The
+  /// empty name and "." target the models folder itself, ".." the whole store, so they and any
+  /// hidden name (leading ".") are refused too. Everything else never reaches the filesystem or
+  /// the Hub search pattern.
+  private static let allowedCharacters = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
   static func validated(_ model: String) throws -> String {
-    if model.isEmpty || model.hasPrefix(".") || model.contains("/") || model.contains("..") {
+    if model.isEmpty || model.hasPrefix(".") || model.contains("..")
+      || !model.allSatisfy({ allowedCharacters.contains($0) }) {
       throw WhisperKitError(.modelMissing, "Invalid model name")
     }
     return model

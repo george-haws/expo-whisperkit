@@ -68,7 +68,7 @@ sub.remove();
 | Function | Notes |
 |---|---|
 | `isAvailable()` | `false` on Android or without the native module |
-| `getModelStatus(model?)`, `downloadModel(model?)`, `deleteModel(model)`, `listDownloadedModels()`, `loadModel(model?)`, `unloadModel()` | Model is `DEFAULT_MODEL` (`'base'`) when omitted. Models load lazily on first use; `loadModel` is an optional prewarm. One model is loaded at a time. Model names must be non-empty, must not contain `/` or `..`, and must not start with `.`; any other name rejects with `model-missing`. |
+| `getModelStatus(model?)`, `downloadModel(model?)`, `deleteModel(model)`, `listDownloadedModels()`, `loadModel(model?)`, `unloadModel()` | Model is `DEFAULT_MODEL` (`'base'`) when omitted. Models load lazily on first use; `loadModel` is an optional prewarm. One model is loaded at a time. Model names may contain only letters, digits, `.`, `_` and `-`, must not start with `.` and must not contain `..`; any other name rejects with `model-missing`. |
 | `transcribeFile(uri, options?)` | Any format AVFoundation reads |
 | `getMicrophonePermission()`, `requestMicrophonePermission()` | Only `request` prompts |
 | `startRecording()`, `stopRecording(options?)`, `cancelRecording()` | Push-to-talk; `stop` returns the transcription |
