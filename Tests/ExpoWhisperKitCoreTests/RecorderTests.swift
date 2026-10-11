@@ -475,4 +475,33 @@ final class RecorderTests: XCTestCase {
     XCTAssertEqual(result["text"] as? String, "hello")
     XCTAssertEqual(model.lastSamples, [0.2])
   }
+
+  func testCaptureDuringAStopIsResolvedAfterTheTeardown() async throws {
+    // Ruling 1: a capture signal that lands while a stop is tearing the session down must not
+    // resolve the pending start mid-teardown; endStreaming resolves it once the state is reset.
+    model.session.setCapturesOnStart(false)
+    let recorder = makeRecorder()
+    let session = model.session
+    let gate = Gate()
+    session.stopGate = gate
+    let started = Flag()
+    let start = Task {
+      try await recorder.startStreaming(request: self.request)
+      started.set()
+    }
+    await eventually { session.startCalls == 1 }
+    let stop = Task { try await recorder.stopStreaming() }
+    await eventually { session.stopEntered == 1 }
+    session.capture()
+    try await Task.sleep(nanoseconds: 100_000_000)
+    XCTAssertFalse(started.isSet, "a capture during teardown does not resolve the start early")
+    await gate.open()
+    try await start.value
+    let result = try await stop.value
+    XCTAssertEqual(result["text"] as? String, "")
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+  }
 }
