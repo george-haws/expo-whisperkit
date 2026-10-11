@@ -382,4 +382,97 @@ final class RecorderTests: XCTestCase {
       XCTAssertEqual(code(error), .recordingFailed)
     }
   }
+
+  // MARK: Streaming start (review findings 1 to 4)
+
+  func testStartStreamingResolvesOnTheCaptureSignalNotATimer() async throws {
+    // Finding 4 (and 3): the Recorder used to poll WhisperKit's audio engine for a second.
+    model.session.setCapturesOnStart(false)
+    let recorder = makeRecorder()
+    let session = model.session
+    let started = Flag()
+    let start = Task {
+      try await recorder.startStreaming(request: self.request)
+      started.set()
+    }
+    await eventually { session.startCalls == 1 }
+    try await Task.sleep(nanoseconds: 200_000_000)
+    XCTAssertFalse(started.isSet, "start waits for the capture signal")
+    let before = Date()
+    session.capture()
+    try await start.value
+    XCTAssertLessThan(Date().timeIntervalSince(before), 0.3, "start resolves on the signal, not on a timer")
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .streaming)
+    _ = try await recorder.stopStreaming()
+  }
+
+  func testQuietSessionEndDuringStartIsRecordingFailed() async {
+    // Finding 2: WhisperKit returns normally when its permission re-check fails or its loop stops
+    // itself after a decode error. During start that is a failed start, not an interruption.
+    model.session.setBehaviour(.returnAtOnce)
+    let recorder = makeRecorder()
+    do {
+      try await recorder.startStreaming(request: request)
+      XCTFail("expected recording-failed")
+    } catch {
+      XCTAssertEqual(code(error), .recordingFailed)
+      XCTAssertEqual(
+        (error as? WhisperKitError)?.message,
+        "Could not start the microphone: the capture loop ended before recording began"
+      )
+    }
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+    do {
+      _ = try await recorder.stopStreaming()
+      XCTFail("nothing is kept after a failed start")
+    } catch {
+      XCTAssertEqual(code(error), .recordingFailed)
+    }
+  }
+
+  func testFailureAfterASlowStartIsStillRecordingFailed() async throws {
+    // Finding 3: a microphone failure that surfaces after the old one-second window used to be
+    // reported as a successful start and then silently turned into an interruption.
+    model.session.setCapturesOnStart(false)
+    let recorder = makeRecorder()
+    let session = model.session
+    let start = Task { try await recorder.startStreaming(request: self.request) }
+    await eventually { session.startCalls == 1 }
+    try await Task.sleep(nanoseconds: 1_200_000_000)
+    session.fail(with: NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "route lost"]))
+    do {
+      try await start.value
+      XCTFail("expected recording-failed")
+    } catch {
+      XCTAssertEqual(code(error), .recordingFailed)
+      XCTAssertEqual((error as? WhisperKitError)?.message, "Could not start the microphone: route lost")
+    }
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+  }
+
+  func testInterruptWhileWaitingForTheMicrophoneResolvesStartAndKeepsAudio() async throws {
+    // Finding 1, Recorder half: a stop that ends the session during the start wait resolves the
+    // pending start (the session's own rules apply) instead of spinning.
+    model.session.setCapturesOnStart(false)
+    let recorder = makeRecorder()
+    let session = model.session
+    let start = Task { try await recorder.startStreaming(request: self.request) }
+    await eventually { session.startCalls == 1 }
+    model.fakeProcessor.feed([0.2])
+    await recorder.interrupt()
+    try await start.value
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    XCTAssertEqual(session.stopCalls, 1)
+    let result = try await recorder.stopStreaming()
+    XCTAssertEqual(result["text"] as? String, "hello")
+    XCTAssertEqual(model.lastSamples, [0.2])
+  }
 }

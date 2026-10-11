@@ -11,6 +11,7 @@ protocol StreamingSession: AnyObject, Sendable {
   /// Returns when the capture loop ends: after `stop()`, or on its own (a decode error, or
   /// WhisperKit's permission re-check failing). Throws when the microphone cannot start.
   /// `onCapturing` is called at most once, from any thread, when the microphone is up.
+  /// It must not block: in production it runs on WhisperKit's transcriber actor inside `startRecordingLive`.
   func start(onCapturing: @escaping @Sendable () -> Void) async throws
   func stop() async
 }
@@ -161,7 +162,7 @@ final class CapturingAudioProcessor: AudioProcessing, @unchecked Sendable {
 
   func startRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
     try base.startRecordingLive(inputDeviceID: inputDeviceID, callback: callback)
-    lock.lock(); let capturing = onCapturing; lock.unlock()
+    lock.lock(); let capturing = onCapturing; onCapturing = nil; lock.unlock()
     capturing?()
   }
 

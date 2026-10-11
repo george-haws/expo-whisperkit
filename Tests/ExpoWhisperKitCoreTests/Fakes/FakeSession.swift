@@ -3,25 +3,25 @@ import Foundation
 
 /// A StreamingSession with a scripted `start()`.
 ///
-/// - `.runUntilStopped`: `start()` suspends until `stop()` is called, like WhisperKit's loop.
+/// - `.runUntilStopped`: `start()` suspends until `stop()` or `fail(with:)`, like WhisperKit's loop.
 /// - `.returnAtOnce`: `start()` returns immediately with no error (WhisperKit's permission re-check
 ///   failing, or its loop stopping itself after a decode error).
 /// - `.throwError`: `start()` throws (the microphone could not start).
-/// - `.hangUntilReleased`: `start()` ignores `stop()` and returns only on `release()`, which is what a
-///   stop that lands during WhisperKit's permission await produces.
+///
+/// By default a `.runUntilStopped` start reports capture at once, as a healthy microphone would.
+/// `setCapturesOnStart(false)` holds that back so a test can call `capture()` itself.
 final class FakeSession: StreamingSession, @unchecked Sendable {
   enum StartBehaviour {
     case runUntilStopped
     case returnAtOnce
     case throwError(Error)
-    case hangUntilReleased
   }
 
   private let lock = NSLock()
   private var behaviour: StartBehaviour = .runUntilStopped
-  private var continuation: CheckedContinuation<Void, Never>?
+  private var capturesOnStart = true
+  private var continuation: CheckedContinuation<Void, Error>?
   private var stopRequested = false
-  private var released = false
   private var _stopEntered = 0
   private var _startCalls = 0
   private var _stopCalls = 0
@@ -36,6 +36,7 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
   var stopCalls: Int { lock.lock(); defer { lock.unlock() }; return _stopCalls }
 
   func setBehaviour(_ value: StartBehaviour) { lock.lock(); behaviour = value; lock.unlock() }
+  func setCapturesOnStart(_ value: Bool) { lock.lock(); capturesOnStart = value; lock.unlock() }
   func setOnText(_ callback: @escaping StreamingTextCallback) { lock.lock(); _onText = callback; lock.unlock() }
 
   /// Pushes a text update through the Recorder's callback, as WhisperKit's state change would.
@@ -50,42 +51,51 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     callback?()
   }
 
-  private func beginStart(_ onCapturing: @escaping @Sendable () -> Void) -> StartBehaviour {
+  /// Ends a suspended `start()` with `error`, as a capture loop that dies after the microphone
+  /// came up (or never came up) would.
+  func fail(with error: Error) {
+    lock.lock()
+    let resume = continuation
+    continuation = nil
+    lock.unlock()
+    resume?.resume(throwing: error)
+  }
+
+  private func beginStart(_ onCapturing: @escaping @Sendable () -> Void) -> (StartBehaviour, Bool) {
     lock.lock(); defer { lock.unlock() }
     _startCalls += 1
     _onCapturing = onCapturing
-    return behaviour
+    return (behaviour, capturesOnStart)
   }
 
   /// Returns false when the continuation must be resumed at once (a stop already landed).
-  private func park(_ c: CheckedContinuation<Void, Never>, for behaviour: StartBehaviour) -> Bool {
+  private func park(_ c: CheckedContinuation<Void, Error>) -> Bool {
     lock.lock(); defer { lock.unlock() }
-    if case .runUntilStopped = behaviour, stopRequested { return false }
-    if case .hangUntilReleased = behaviour, released { return false }
+    if stopRequested { return false }
     continuation = c
     return true
   }
 
-  private func finishStop() -> CheckedContinuation<Void, Never>? {
+  private func finishStop() -> CheckedContinuation<Void, Error>? {
     lock.lock(); defer { lock.unlock() }
     _stopCalls += 1
     stopRequested = true
-    guard case .runUntilStopped = behaviour else { return nil }
     let resume = continuation
     continuation = nil
     return resume
   }
 
   func start(onCapturing: @escaping @Sendable () -> Void) async throws {
-    let behaviour = beginStart(onCapturing)
+    let (behaviour, capturesOnStart) = beginStart(onCapturing)
     switch behaviour {
     case .returnAtOnce:
       return
     case .throwError(let error):
       throw error
-    case .runUntilStopped, .hangUntilReleased:
-      await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-        if !park(c, for: behaviour) { c.resume() }
+    case .runUntilStopped:
+      if capturesOnStart { onCapturing() }
+      try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+        if !park(c) { c.resume() }
       }
     }
   }
@@ -96,15 +106,5 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     enterStop()
     if let stopGate { await stopGate.wait() }
     finishStop()?.resume()
-  }
-
-  /// Ends a `.hangUntilReleased` start.
-  func release() {
-    lock.lock()
-    released = true
-    let resume = continuation
-    continuation = nil
-    lock.unlock()
-    resume?.resume()
   }
 }

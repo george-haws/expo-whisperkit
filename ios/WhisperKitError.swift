@@ -26,3 +26,11 @@ struct WhisperKitError: Error, CustomStringConvertible {
 
   var description: String { message }
 }
+
+extension WhisperKitError {
+  /// `recording-failed` for a microphone that could not start, worded the same for push-to-talk
+  /// and streaming.
+  static func microphoneStartFailed(_ reason: String, underlying: Error? = nil) -> WhisperKitError {
+    WhisperKitError(.recordingFailed, "Could not start the microphone: \(reason)", underlying: underlying)
+  }
+}
