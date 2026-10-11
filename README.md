@@ -98,7 +98,7 @@ Interruptions (calls, Siri, backgrounding) end capture without an error; the aud
 
 A streaming session can also end without any signal reaching JavaScript: an interruption or backgrounding that arrives while the model is still loading, or WhisperKit's capture loop stopping on an internal error. `stopStreaming` then resolves with whatever was captured, possibly empty text, rather than rejecting.
 
-`startStreaming` rejects with `recording-failed` if the microphone cannot be started.
+`startStreaming` resolves once the microphone is capturing. It rejects with `recording-failed` if the microphone cannot be started or the session ends before capture begins; a stop or interruption during the start resolves it, and the audio captured so far is kept for the next `stopStreaming`.
 
 ## Where models live
 
