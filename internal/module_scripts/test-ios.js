@@ -21,10 +21,19 @@ function read(relative, pattern, what) {
 }
 
 const tag = read('ios/whisperkit_version.rb', /WHISPERKIT_TAG\s*=\s*'([^']+)'/, 'WHISPERKIT_TAG');
+const commit = read('ios/whisperkit_version.rb', /WHISPERKIT_COMMIT\s*=\s*'([0-9a-f]{40})'/, 'WHISPERKIT_COMMIT');
 const version = read('Package.swift', /let whisperKitVersion\s*=\s*"([^"]+)"/, 'whisperKitVersion');
 if (`v${version}` !== tag) {
   console.error(
     `test-ios: WhisperKit version drift: ios/whisperkit_version.rb pins ${tag}, Package.swift pins ${version}`
+  );
+  process.exit(1);
+}
+const resolved = JSON.parse(fs.readFileSync(path.join(root, 'Package.resolved'), 'utf8'));
+const pin = (resolved.pins || []).find((p) => p.identity === 'argmax-oss-swift');
+if (!pin || pin.state.revision !== commit) {
+  console.error(
+    `test-ios: WhisperKit commit drift: ios/whisperkit_version.rb pins ${commit}, Package.resolved pins ${pin ? pin.state.revision : 'nothing'}`
   );
   process.exit(1);
 }

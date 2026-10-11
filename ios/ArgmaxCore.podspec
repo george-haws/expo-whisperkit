@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.author           = 'Argmax, Inc.'
   s.platforms        = { :ios => '16.0' }
   s.swift_version    = '5.10'
-  s.source           = { :git => WHISPERKIT_GIT, :tag => WHISPERKIT_TAG }
+  s.source           = { :git => WHISPERKIT_GIT, :commit => WHISPERKIT_COMMIT }
   s.source_files     = 'Sources/ArgmaxCore/**/*.swift'
   s.static_framework = true
   s.pod_target_xcconfig = {

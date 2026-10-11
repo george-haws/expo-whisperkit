@@ -2,7 +2,8 @@
 import PackageDescription
 
 // The WhisperKit version must equal WHISPERKIT_TAG in ios/whisperkit_version.rb without the
-// leading `v`. `npm run test:ios` refuses to run when they differ.
+// leading `v`, and the Package.resolved revision must equal WHISPERKIT_COMMIT there.
+// `npm run test:ios` refuses to run when either differs.
 let whisperKitVersion = "1.1.1"
 
 let package = Package(

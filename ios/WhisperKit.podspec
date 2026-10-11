@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.author           = 'Argmax, Inc.'
   s.platforms        = { :ios => '16.0' }
   s.swift_version    = '5.10'
-  s.source           = { :git => WHISPERKIT_GIT, :tag => WHISPERKIT_TAG }
+  s.source           = { :git => WHISPERKIT_GIT, :commit => WHISPERKIT_COMMIT }
   s.source_files     = 'Sources/WhisperKit/**/*.swift'
   s.frameworks       = 'CoreML', 'AVFoundation', 'Accelerate'
   s.static_framework = true
