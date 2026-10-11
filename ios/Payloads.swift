@@ -68,3 +68,25 @@ final class Throttle: @unchecked Sendable {
     return false
   }
 }
+
+/// One `Throttle` per model name, so concurrent downloads do not starve each other's
+/// `downloadProgress` events (spec §3.4). Completion (`fraction >= 1`) is always sent and ends
+/// the model's window, so a later download of the same model starts fresh.
+final class ProgressThrottle: @unchecked Sendable {
+  private let interval: TimeInterval
+  private var throttles: [String: Throttle] = [:]
+  private let lock = NSLock()
+
+  init(interval: TimeInterval) {
+    self.interval = interval
+  }
+
+  func shouldSend(model: String, fraction: Double) -> Bool {
+    let complete = fraction >= 1
+    lock.lock()
+    let throttle = throttles[model] ?? Throttle(interval: interval)
+    throttles[model] = complete ? nil : throttle
+    lock.unlock()
+    return throttle.shouldSend(force: complete)
+  }
+}

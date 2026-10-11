@@ -8,7 +8,7 @@ public class ExpoWhisperKitModule: Module {
   private var memoryWarningObserver: NSObjectProtocol?
   private var recorder: Recorder!
   private var sessionObservers: [NSObjectProtocol] = []
-  private let progressThrottle = Throttle(interval: 0.25)
+  private let progressThrottle = ProgressThrottle(interval: 0.25)
 
   public func definition() -> ModuleDefinition {
     Name("ExpoWhisperKit")
@@ -23,7 +23,7 @@ public class ExpoWhisperKitModule: Module {
           self?.sendEvent("modelState", ["model": model, "state": state])
         },
         emitProgress: { [weak self] model, fraction in
-          guard let self, self.progressThrottle.shouldSend(force: fraction >= 1) else { return }
+          guard let self, self.progressThrottle.shouldSend(model: model, fraction: fraction) else { return }
           self.sendEvent("downloadProgress", ["model": model, "fraction": fraction])
         }
       )
@@ -45,11 +45,7 @@ public class ExpoWhisperKitModule: Module {
       let center = NotificationCenter.default
       self.sessionObservers = [
         center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] note in
-          let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-          guard raw == AVAudioSession.InterruptionType.began.rawValue, let recorder = self?.recorder else { return }
-          // iOS delivers a stale "began" with WasSuspended on resume; it would end a capture
-          // started right after the app returns, so it is ignored.
-          if (note.userInfo?[AVAudioSessionInterruptionWasSuspendedKey] as? Bool) == true { return }
+          guard AudioInterruption.shouldInterrupt(userInfo: note.userInfo), let recorder = self?.recorder else { return }
           Task { await recorder.interrupt() }
         },
         center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] _ in

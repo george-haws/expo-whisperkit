@@ -442,3 +442,23 @@ final class StreamingDedupe: @unchecked Sendable {
     return true
   }
 }
+
+/// Which `AVAudioSession.interruptionNotification` payloads end a capture (spec §3.3).
+enum AudioInterruption {
+  /// `AVAudioSession.InterruptionReason.appWasSuspended.rawValue`. The case is deprecated from
+  /// iOS 16 (the system no longer sends it), so the raw value is spelled out rather than
+  /// referencing the symbol; on earlier systems the notification still carries it.
+  static let appWasSuspendedReason: UInt = 1
+
+  /// True for a `began` interruption, except one delivered on resume because the app had been
+  /// suspended: that one is stale and would end a capture started right after the app returned.
+  static func shouldInterrupt(userInfo: [AnyHashable: Any]?) -> Bool {
+    guard let type = userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+          type == AVAudioSession.InterruptionType.began.rawValue
+    else { return false }
+    if let reason = userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt, reason == appWasSuspendedReason {
+      return false
+    }
+    return true
+  }
+}
