@@ -22,6 +22,7 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
   private var capturesOnStart = true
   private var continuation: CheckedContinuation<Void, Error>?
   private var stopRequested = false
+  private var pendingFailure: Error?
   private var _stopEntered = 0
   private var _startCalls = 0
   private var _stopCalls = 0
@@ -57,6 +58,7 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     lock.lock()
     let resume = continuation
     continuation = nil
+    if resume == nil { pendingFailure = error }
     lock.unlock()
     resume?.resume(throwing: error)
   }
@@ -68,12 +70,14 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     return (behaviour, capturesOnStart)
   }
 
-  /// Returns false when the continuation must be resumed at once (a stop already landed).
-  private func park(_ c: CheckedContinuation<Void, Error>) -> Bool {
+  /// `parked` is false when the continuation must be resumed at once: with `failure` when a
+  /// `fail(with:)` came first, else normally (a stop already landed).
+  private func park(_ c: CheckedContinuation<Void, Error>) -> (parked: Bool, failure: Error?) {
     lock.lock(); defer { lock.unlock() }
-    if stopRequested { return false }
+    if let failure = pendingFailure { pendingFailure = nil; return (false, failure) }
+    if stopRequested { return (false, nil) }
     continuation = c
-    return true
+    return (true, nil)
   }
 
   private func finishStop() -> CheckedContinuation<Void, Error>? {
@@ -95,7 +99,8 @@ final class FakeSession: StreamingSession, @unchecked Sendable {
     case .runUntilStopped:
       if capturesOnStart { onCapturing() }
       try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-        if !park(c) { c.resume() }
+        let (parked, failure) = park(c)
+        if !parked { if let failure { c.resume(throwing: failure) } else { c.resume() } }
       }
     }
   }

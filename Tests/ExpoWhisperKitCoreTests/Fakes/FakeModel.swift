@@ -17,6 +17,7 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
   private var next = FakeSession()
   private var handedOut: [FakeSession] = []
   private var sessionError: Error?
+  private var override: (any StreamingSession)?
   /// When set, `transcribe` waits on it, holding the engine busy.
   var transcribeGate: Gate?
 
@@ -36,6 +37,7 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
 
   func setResult(_ value: Result<[TranscriptionResult], Error>) { lock.lock(); result = value; lock.unlock() }
   func setSession(_ value: FakeSession) { lock.lock(); next = value; lock.unlock() }
+  func setSessionOverride(_ session: any StreamingSession) { lock.lock(); override = session; lock.unlock() }
   func setSessionError(_ error: Error?) { lock.lock(); sessionError = error; lock.unlock() }
 
   func transcribe(path: String, options: DecodingOptions) async throws -> [TranscriptionResult] {
@@ -61,13 +63,14 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
   private func recordUnload() { lock.lock(); _unloads += 1; lock.unlock() }
 
   /// Hands out the preset session (or the error) and presets a fresh one for the next call.
-  private func takeSession() -> (Error?, FakeSession) {
+  private func takeSession() -> (Error?, (any StreamingSession)?, FakeSession) {
     lock.lock(); defer { lock.unlock() }
-    if let sessionError { return (sessionError, next) }
+    if let sessionError { return (sessionError, nil, next) }
+    if let override { return (nil, override, next) }
     let session = next
     handedOut.append(session)
     next = FakeSession()
-    return (nil, session)
+    return (nil, nil, session)
   }
 
   func unloadModels() async {
@@ -75,8 +78,9 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
   }
 
   func makeStreamingSession(options: DecodingOptions, onText: @escaping StreamingTextCallback) throws -> any StreamingSession {
-    let (error, session) = takeSession()
+    let (error, overridden, session) = takeSession()
     if let error { throw error }
+    if let overridden { return overridden }
     session.setOnText(onText)
     return session
   }

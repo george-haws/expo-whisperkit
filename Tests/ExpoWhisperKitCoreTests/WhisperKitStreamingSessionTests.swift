@@ -30,22 +30,23 @@ final class WhisperKitStreamingSessionTests: XCTestCase {
 
   func testStopBeforeTheMicrophoneIsUpStillEndsTheLoop() async throws {
     // Finding 1: WhisperKit's stop is a no-op until `isRecording` is set, which happens after
-    // its permission await. A stop that lands in that window must still end the session.
-    let done = Flag()
+    // its permission await. A stop that lands in that window must still end the session, and
+    // the microphone must never open for it.
+    let ended = Flag()
     let session = self.session!
     let start = Task {
-      try await session.start(onCapturing: {})
-      done.set()
+      do { try await session.start(onCapturing: {}) } catch {}
+      ended.set()
     }
     let transcriber = self.transcriber!
     await eventually { transcriber.startCalls == 1 }
     await session.stop()
-    XCTAssertFalse(done.isSet)
+    XCTAssertFalse(ended.isSet)
     await transcriber.permissionGate.open()
-    await eventually { done.isSet }
+    await eventually { ended.isSet }
     start.cancel()
     XCTAssertFalse(transcriber.isRecording)
-    XCTAssertGreaterThanOrEqual(transcriber.stopCalls, 2, "the wrapper stops again once capture begins")
+    XCTAssertEqual(processor.startCalls, 0, "the microphone never opens for a session already stopped")
   }
 
   func testStartRethrowsWhenTheMicrophoneCannotStart() async {

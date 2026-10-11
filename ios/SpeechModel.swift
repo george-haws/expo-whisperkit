@@ -102,13 +102,12 @@ extension WhisperKit: SpeechModel {
 ///
 /// WhisperKit's `stopStreamTranscription` only clears `isRecording`, which its start sets after
 /// an `await` on the permission check. A stop that lands in that window is a no-op and the loop
-/// would then run forever, so a stop is remembered and repeated once capture begins (review
-/// finding 1).
-final class WhisperKitStreamingSession: StreamingSession, @unchecked Sendable {
+/// would then run forever. `stop()` therefore also tells the `CapturingAudioProcessor`, which
+/// refuses to open the microphone once a stop has been requested, so the start throws before
+/// the loop begins (review finding 1).
+final class WhisperKitStreamingSession: StreamingSession, Sendable {
   private let transcriber: any StreamTranscribing
   private let processor: CapturingAudioProcessor
-  private let lock = NSLock()
-  private var stopRequested = false
 
   init(transcriber: any StreamTranscribing, processor: CapturingAudioProcessor) {
     self.transcriber = transcriber
@@ -116,33 +115,25 @@ final class WhisperKitStreamingSession: StreamingSession, @unchecked Sendable {
   }
 
   func start(onCapturing: @escaping @Sendable () -> Void) async throws {
-    processor.setOnCapturing { [weak self] in
-      if let self, self.isStopRequested() {
-        let transcriber = self.transcriber
-        Task { await transcriber.stopStreamTranscription() }
-      }
-      onCapturing()
-    }
+    processor.setOnCapturing(onCapturing)
     try await transcriber.startStreamTranscription()
   }
 
   func stop() async {
-    requestStop()
+    processor.requestStop()
     await transcriber.stopStreamTranscription()
   }
-
-  private func requestStop() { lock.lock(); stopRequested = true; lock.unlock() }
-
-  private func isStopRequested() -> Bool { lock.lock(); defer { lock.unlock() }; return stopRequested }
 }
 
 /// Forwards every `AudioProcessing` call to the model's processor and reports the moment the
 /// microphone is up: `startRecordingLive` returning without throwing is where WhisperKit's
 /// `AudioProcessor` has started its `AVAudioEngine`.
 final class CapturingAudioProcessor: AudioProcessing, @unchecked Sendable {
+  // `var` only because `AudioProcessing` is not class-bound and `relativeEnergyWindow` has a setter; nothing in this module calls that setter.
   private var base: any AudioProcessing
   private let lock = NSLock()
   private var onCapturing: (@Sendable () -> Void)?
+  private var stopRequested = false
 
   init(_ base: any AudioProcessing) {
     self.base = base
@@ -160,7 +151,17 @@ final class CapturingAudioProcessor: AudioProcessing, @unchecked Sendable {
     set { base.relativeEnergyWindow = newValue }
   }
 
+  func requestStop() {
+    lock.lock(); stopRequested = true; lock.unlock()
+  }
+
+  /// A stop that arrived before WhisperKit reached `startRecordingLive` would otherwise open the
+  /// microphone for a moment and need a second stop. Throwing here makes upstream reset
+  /// `isRecording` and rethrow, so the loop never starts and the microphone never opens; the
+  /// Recorder ignores that throw because it began the stop.
   func startRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
+    lock.lock(); let stopped = stopRequested; lock.unlock()
+    if stopped { throw CancellationError() }
     try base.startRecordingLive(inputDeviceID: inputDeviceID, callback: callback)
     lock.lock(); let capturing = onCapturing; onCapturing = nil; lock.unlock()
     capturing?()

@@ -504,4 +504,27 @@ final class RecorderTests: XCTestCase {
     let busy = await engine.isBusy
     XCTAssertFalse(busy)
   }
+
+  func testInterruptDuringWhisperKitsPermissionAwaitEndsTheSessionWithoutOpeningTheMicrophone() async throws {
+    // Finding 1 end to end: Recorder -> WhisperKitStreamingSession -> a transcriber with
+    // upstream's start order. The interruption lands while the transcriber awaits permission.
+    let capturing = CapturingAudioProcessor(model.fakeProcessor)
+    let transcriber = FakeTranscriber(processor: capturing)
+    model.setSessionOverride(WhisperKitStreamingSession(transcriber: transcriber, processor: capturing))
+    let recorder = makeRecorder()
+    let start = Task { try await recorder.startStreaming(request: self.request) }
+    await eventually { transcriber.startCalls == 1 }
+    let interrupt = Task { await recorder.interrupt() }
+    await eventually { transcriber.stopCalls == 1 }
+    await transcriber.permissionGate.open()
+    await interrupt.value
+    try await start.value
+    XCTAssertEqual(model.fakeProcessor.startCalls, 0, "the microphone never opened")
+    let mode = await recorder.mode
+    XCTAssertEqual(mode, .idle)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+    let result = try await recorder.stopStreaming()
+    XCTAssertEqual(result["text"] as? String, "")
+  }
 }
