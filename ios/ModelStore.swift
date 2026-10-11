@@ -9,7 +9,7 @@ protocol ModelStoring: Actor {
   func isDownloading(_ model: String) -> Bool
   func listPresent() -> [String]
   func delete(_ model: String) throws
-  /// Fetches the files into a staging folder and returns it. The model stays "downloading"
+  /// Fetches the files into a staging folder and returns it (or the final folder when the model is already present, which `commit` tolerates). The model stays "downloading"
   /// until `commit` or `discard`; the caller validates the files (a first load) in between.
   func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL
   /// Moves the staged folder into place: the model is present and no longer downloading.

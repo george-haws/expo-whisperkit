@@ -101,6 +101,10 @@ actor Engine {
       await probe.unloadModels()
       try await store.commit(model)
       emitState(model, "present")
+    } catch let error as WhisperKitError {
+      await store.discard(model)
+      emitState(model, "absent")
+      throw error
     } catch {
       await store.discard(model)
       emitState(model, "absent")
