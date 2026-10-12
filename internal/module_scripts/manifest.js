@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+// Regenerates ios/ModelManifest.swift. For each variant named on the command line it resolves the
+// model folder in argmaxinc/whisperkit-coreml and the openai/whisper-<family> tokenizer repo, pins
+// both to one commit, downloads every file at that commit and records its sha256. Node >= 20.
+//
+//   node internal/module_scripts/manifest.js base [small.en ...]
+//   --revision <sha>            model repo commit (default: resolve main)
+//   --tokenizer-revision <sha>  tokenizer repo commit, applied to every family (default: resolve main)
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { Readable } = require('stream');
+
+const ENDPOINT = 'https://huggingface.co';
+const MODEL_REPO = 'argmaxinc/whisperkit-coreml';
+// What WhisperKit's ModelUtilities.loadTokenizer reads from the tokenizer repo (chat templates do not exist there).
+const TOKENIZER_FILES = ['config.json', 'tokenizer_config.json', 'tokenizer.json'];
+// Mirrors ModelUtilities.tokenizerNameForVariant; ordered so ".en" and versioned names win over their prefixes.
+const TOKENIZER_FAMILIES = ['large-v3', 'large-v2', 'large', 'medium.en', 'medium', 'small.en', 'small', 'base.en', 'base', 'tiny.en', 'tiny'];
+const OUT = path.join(__dirname, '..', '..', 'ios', 'ModelManifest.swift');
+
+function parseArgs(argv) {
+  const opts = { variants: [], revision: null, tokenizerRevision: null };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--revision') opts.revision = argv[++i];
+    else if (argv[i] === '--tokenizer-revision') opts.tokenizerRevision = argv[++i];
+    else opts.variants.push(argv[i]);
+  }
+  if (opts.variants.length === 0) {
+    console.error('manifest: name at least one variant, e.g. `npm run manifest -- base`');
+    process.exit(1);
+  }
+  return opts;
+}
+
+async function json(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+  return res.json();
+}
+
+async function resolveRevision(repo) {
+  return (await json(`${ENDPOINT}/api/models/${repo}?revision=main`)).sha;
+}
+
+async function listFiles(repo, revision) {
+  // The `?revision=` query is ignored by the API (it returns main); the /revision/ path is not.
+  const { sha, siblings } = await json(`${ENDPOINT}/api/models/${repo}/revision/${revision}`);
+  if (sha !== revision) throw new Error(`manifest: ${repo} revision ${revision} resolved to ${sha}`);
+  return siblings.map((s) => s.rfilename);
+}
+
+// WhisperKit.download searches "*<variant>/*", then "*openai*<variant>/*" when that is ambiguous.
+// Every model in the repo is a top-level folder, so this is the same as matching the first path component.
+function resolveFolder(files, variant) {
+  const folders = (keep) => [...new Set(files.filter((f) => f.includes('/')).map((f) => f.split('/')[0]).filter(keep))];
+  let candidates = folders((d) => d.endsWith(variant));
+  if (candidates.length !== 1) candidates = folders((d) => d.includes('openai') && d.endsWith(variant));
+  if (candidates.length !== 1) {
+    throw new Error(`variant ${variant}: ${candidates.length === 0 ? 'no' : 'multiple'} folders match in ${MODEL_REPO}: ${candidates.join(', ')}`);
+  }
+  return candidates[0];
+}
+
+function tokenizerRepo(variant) {
+  const family = TOKENIZER_FAMILIES.find((f) => variant.includes(f));
+  if (!family) throw new Error(`variant ${variant}: no tokenizer family in ${TOKENIZER_FAMILIES.join(', ')}`);
+  return `openai/whisper-${family}`;
+}
+
+async function sha256(repo, revision, file) {
+  const url = `${ENDPOINT}/${repo}/resolve/${revision}/${file}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of Readable.fromWeb(res.body)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function hashAll(repo, revision, files, prefix) {
+  const out = {};
+  for (const file of files.sort()) {
+    process.stderr.write(`  ${file}\n`);
+    out[file.slice(prefix.length)] = await sha256(repo, revision, file);
+  }
+  return out;
+}
+
+const swiftString = (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
+function swiftDictionary(map, indent) {
+  const keys = Object.keys(map).sort();
+  if (keys.length === 0) return '[:]';
+  return `[\n${keys.map((k) => `${indent}  ${swiftString(k)}: ${swiftString(map[k])},`).join('\n')}\n${indent}]`;
+}
+
+function render(entries, argv) {
+  const names = Object.keys(entries).sort();
+  const body = names
+    .map((name) => {
+      const e = entries[name];
+      return [
+        `    ${swiftString(name)}: ManifestEntry(`,
+        `      repo: ${swiftString(e.repo)},`,
+        `      revision: ${swiftString(e.revision)},`,
+        `      folder: ${swiftString(e.folder)},`,
+        `      files: ${swiftDictionary(e.files, '      ')},`,
+        `      tokenizerRepo: ${swiftString(e.tokenizerRepo)},`,
+        `      tokenizerRevision: ${swiftString(e.tokenizerRevision)},`,
+        `      tokenizerFiles: ${swiftDictionary(e.tokenizerFiles, '      ')}`,
+        `    ),`,
+      ].join('\n');
+    })
+    .join('\n');
+  return [
+    `// Generated by \`node internal/module_scripts/manifest.js ${argv.join(' ')}\` on ${new Date().toISOString().slice(0, 10)}.`,
+    '// Do not edit by hand: rerun the generator and review the diff.',
+    '',
+    '/// Every model this package will download: pinned repo commits and the sha256 of each file.',
+    'enum ModelManifest {',
+    '  static let entries: [String: ManifestEntry] = [',
+    body,
+    '  ]',
+    '}',
+    '',
+  ].join('\n');
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const opts = parseArgs(argv);
+  const revision = opts.revision || (await resolveRevision(MODEL_REPO));
+  process.stderr.write(`${MODEL_REPO} @ ${revision}\n`);
+  const modelFiles = await listFiles(MODEL_REPO, revision);
+  const entries = {};
+  const tokenizerRevisions = {};
+  for (const variant of opts.variants) {
+    const folder = resolveFolder(modelFiles, variant);
+    const tokRepo = tokenizerRepo(variant);
+    if (!tokenizerRevisions[tokRepo]) {
+      tokenizerRevisions[tokRepo] = opts.tokenizerRevision || (await resolveRevision(tokRepo));
+      process.stderr.write(`${tokRepo} @ ${tokenizerRevisions[tokRepo]}\n`);
+    }
+    const tokRevision = tokenizerRevisions[tokRepo];
+    const tokFiles = (await listFiles(tokRepo, tokRevision)).filter((f) => TOKENIZER_FILES.includes(f));
+    if (!tokFiles.includes('tokenizer.json')) throw new Error(`${tokRepo} @ ${tokRevision} has no tokenizer.json`);
+    process.stderr.write(`${variant} -> ${folder}\n`);
+    entries[variant] = {
+      repo: MODEL_REPO,
+      revision,
+      folder,
+      files: await hashAll(MODEL_REPO, revision, modelFiles.filter((f) => f.startsWith(`${folder}/`)), `${folder}/`),
+      tokenizerRepo: tokRepo,
+      tokenizerRevision: tokRevision,
+      tokenizerFiles: await hashAll(tokRepo, tokRevision, tokFiles, ''),
+    };
+  }
+  fs.writeFileSync(OUT, render(entries, argv));
+  process.stderr.write(`wrote ${path.relative(process.cwd(), OUT)}\n`);
+}
+
+main().catch((error) => {
+  console.error(`manifest: ${error.message}`);
+  process.exit(1);
+});

@@ -96,12 +96,17 @@ actor ModelStore: ModelStoring {
     }
   }
 
-  /// Downloads `model` into the staging area. The first load that validates the files and caches
-  /// the tokenizer is the Engine's job, under its exclusivity, so at most one WhisperKit instance
-  /// exists at a time; `commit` then moves the folder into place.
+  /// Downloads `model` at the commit pinned in the manifest into the staging area, verifies every
+  /// file, and prefetches and verifies its tokenizer before staging. A name that is not in the
+  /// manifest rejects before any network access or directory; a model already present returns nil.
+  /// The first load that validates the Core ML files is the Engine's job, under its exclusivity, so
+  /// at most one WhisperKit instance exists at a time; `commit` then moves the folder into place.
   func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL? {
     if isPresent(model) {
       return nil
+    }
+    guard let entry = ModelManifest.entries[model] else {
+      throw WhisperKitError(.downloadFailed, "Model \(model) is not in the manifest")
     }
     guard !downloading.contains(model) else {
       throw WhisperKitError(.busy, "Model \(model) is already downloading")
@@ -111,12 +116,9 @@ actor ModelStore: ModelStoring {
     try? FileManager.default.removeItem(at: base)
     do {
       try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-      let folder = try await WhisperKit.download(
-        variant: model,
-        downloadBase: base,
-        progressCallback: { p in progress(p.fractionCompleted) }
-      )
+      let folder = try await fetchModel(entry, model: model, into: base, progress: progress)
       progress(1)
+      try await fetchTokenizer(entry, model: model)
       staging[model] = folder
       return folder
     } catch let error as WhisperKitError {
@@ -154,5 +156,34 @@ actor ModelStore: ModelStoring {
     downloading.remove(model)
     staging[model] = nil
     try? FileManager.default.removeItem(at: downloadsDir.appendingPathComponent(model, isDirectory: true))
+  }
+
+  /// Snapshots `entry.folder` from the model repo at the pinned commit into `base` and verifies
+  /// it. The Hub lays files out as `<base>/models/<repo>/<folder>/...`.
+  private func fetchModel(
+    _ entry: ManifestEntry, model: String, into base: URL, progress: @escaping @Sendable (Double) -> Void
+  ) async throws -> URL {
+    let hub = HubApiWrapper(downloadBase: base)
+    let repoDir = try await hub.snapshot(
+      from: HubApiWrapper.Repo(id: entry.repo),
+      revision: entry.revision,
+      matching: ["\(entry.folder)/*"]
+    ) { p in progress(p.fractionCompleted) }
+    let folder = repoDir.appendingPathComponent(entry.folder, isDirectory: true)
+    try ModelVerifier.verify(folder: folder, files: entry.files, model: model)
+    return folder
+  }
+
+  /// Snapshots the tokenizer files into `tokenizers/models/<repo>`, where WhisperKit's
+  /// `loadTokenizer` looks first, so the Engine's first load and every later load read them
+  /// offline. A folder that fails verification is removed, so the next attempt downloads afresh.
+  private func fetchTokenizer(_ entry: ManifestEntry, model: String) async throws {
+    let hub = HubApiWrapper(downloadBase: tokenizersDir)
+    let folder = try await hub.snapshot(
+      from: HubApiWrapper.Repo(id: entry.tokenizerRepo),
+      revision: entry.tokenizerRevision,
+      matching: entry.tokenizerFiles.keys.sorted()
+    )
+    try ModelVerifier.verifyOrRemove(folder: folder, files: entry.tokenizerFiles, model: model)
   }
 }
