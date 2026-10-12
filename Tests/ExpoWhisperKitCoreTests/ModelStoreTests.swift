@@ -147,11 +147,13 @@ final class ModelStoreTests: XCTestCase {
     XCTAssertFalse(downloading)
   }
 
-  func testDownloadOfAPresentUnlistedModelReturnsItsFolder() async throws {
+  func testDownloadOfAPresentModelReturnsNilEvenIfUnlisted() async throws {
     // Present wins over the manifest, so a model downloaded by an earlier version keeps working.
     let store = ModelStore(root: root)
     _ = try makeFolder("models/not-a-model")
     let returned = try await store.download("not-a-model") { _ in }
     XCTAssertNil(returned)
+    let downloading = await store.isDownloading("not-a-model")
+    XCTAssertFalse(downloading)
   }
 }
