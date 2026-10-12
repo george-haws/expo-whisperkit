@@ -68,7 +68,7 @@ sub.remove();
 | Function | Notes |
 |---|---|
 | `isAvailable()` | `false` on Android or without the native module |
-| `getModelStatus(model?)`, `downloadModel(model?)`, `deleteModel(model)`, `listDownloadedModels()`, `loadModel(model?)`, `unloadModel()` | Model is `DEFAULT_MODEL` (`'base'`) when omitted. Models load lazily on first use; `loadModel` is an optional prewarm. One model is loaded at a time. Model names may contain only letters, digits, `.`, `_` and `-`, must not start with `.` and must not contain `..`; any other name rejects with `model-missing`. |
+| `getModelStatus(model?)`, `downloadModel(model?)`, `deleteModel(model)`, `listDownloadedModels()`, `loadModel(model?)`, `unloadModel()` | Model is `DEFAULT_MODEL` (`'base'`) when omitted. Models load lazily on first use; `loadModel` is an optional prewarm. One model is loaded at a time. A download's validating first load evicts the loaded model; the next call reloads it. Model names may contain only letters, digits, `.`, `_` and `-`, must not start with `.` and must not contain `..`; any other name rejects with `model-missing`. |
 | `transcribeFile(uri, options?)` | Any format AVFoundation reads |
 | `getMicrophonePermission()`, `requestMicrophonePermission()` | Only `request` prompts |
 | `startRecording()`, `stopRecording(options?)`, `cancelRecording()` | Push-to-talk; `stop` returns the transcription |
@@ -92,7 +92,7 @@ The package also exports `DEFAULT_MODEL`, `WhisperKitError`, `ERROR_CODES` and t
 
 ### Errors
 
-Every rejection is a `WhisperKitError` with `code` in: `unsupported-platform`, `model-missing`, `download-failed`, `load-failed`, `permission-denied`, `recording-failed`, `decode-failed`, `busy`, `cancelled`. `busy` means a conflicting operation is running; nothing is queued. `busy` also covers a model load or prewarm, a download of the same model, or a delete in progress; when `stopRecording` or `stopStreaming` gets `busy`, the captured audio is kept and a retried stop decodes it. Because the set of codes is closed, `load-failed` also covers storage failures in the model-management calls (for example a delete that fails).
+Every rejection is a `WhisperKitError` with `code` in: `unsupported-platform`, `model-missing`, `download-failed`, `load-failed`, `permission-denied`, `recording-failed`, `decode-failed`, `busy`, `cancelled`. `busy` means a conflicting operation is running; nothing is queued. `busy` also covers a model load or prewarm, a downloaded model's first load, a download of the same model, or a delete in progress; when `stopRecording` or `stopStreaming` gets `busy`, the captured audio is kept and a retried stop decodes it. `downloadModel` resolves only after the downloaded files have loaded once; if a decode or streaming session is running when the download finishes, it waits for that to end. Because the set of codes is closed, `load-failed` also covers storage failures in the model-management calls (for example a delete that fails).
 
 Interruptions (calls, Siri, backgrounding) end capture without an error; the audio captured so far is returned by the next `stopRecording` / `stopStreaming`. A memory warning unloads an idle model (`modelState` goes to `present`); the next call reloads it.
 
