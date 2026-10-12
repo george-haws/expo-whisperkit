@@ -10,7 +10,7 @@ export type PermissionStatus = 'granted' | 'denied' | 'undetermined';
 export type DecodingTask = 'transcribe' | 'translate';
 
 export interface DecodingOptions {
-  /** WhisperKit variant name. Default `DEFAULT_MODEL`. */
+  /** WhisperKit variant name listed in the package's manifest. Default `DEFAULT_MODEL`. */
   model?: string;
   /** ISO 639-1 code. Omitted: auto-detect. */
   language?: string;

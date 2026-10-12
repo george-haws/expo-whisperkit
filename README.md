@@ -42,7 +42,7 @@ pod 'WhisperKit', :podspec => '../node_modules/expo-whisperkit/ios/WhisperKit.po
 ```ts
 import * as WhisperKit from 'expo-whisperkit';
 
-// Models are WhisperKit variant names: 'base', 'small.en', 'large-v3_turbo', ...
+// Models are WhisperKit variant names listed in the package's manifest (currently 'base').
 await WhisperKit.downloadModel('base');              // emits downloadProgress
 const { state } = await WhisperKit.getModelStatus(); // 'absent' | 'downloading' | 'present' | 'loaded'
 
@@ -75,7 +75,7 @@ sub.remove();
 | `startStreaming(options?)`, `stopStreaming()` | Partial results via `streamingUpdate`; `stop` returns the full transcription |
 | `addListener(event, fn)` | Returns `{ remove() }` |
 
-The package also exports `DEFAULT_MODEL`, `WhisperKitError`, `ERROR_CODES` and the types below. `simulateMemoryWarningForTesting()` is a test hook for the example app, not part of the supported API.
+The package also exports `DEFAULT_MODEL`, `WhisperKitError`, `ERROR_CODES` and the types below. `simulateMemoryWarningForTesting()` is a test hook for the example app, not part of the supported API. It stays in the production module by design: it posts a memory warning the app would receive anyway, and only the app's own JavaScript can call it.
 
 `DecodingOptions`: `{ model?, language?, task?: 'transcribe' | 'translate', prompt?, download?: boolean }`. With `download: false` an absent model rejects with `model-missing` instead of downloading.
 
@@ -94,7 +94,11 @@ The package also exports `DEFAULT_MODEL`, `WhisperKitError`, `ERROR_CODES` and t
 
 Every rejection is a `WhisperKitError` with `code` in: `unsupported-platform`, `model-missing`, `download-failed`, `load-failed`, `permission-denied`, `recording-failed`, `decode-failed`, `busy`, `cancelled`. `busy` means a conflicting operation is running; nothing is queued. `busy` also covers a model load or prewarm, a download of the same model, or a delete in progress; when `stopRecording` or `stopStreaming` gets `busy`, the captured audio is kept and a retried stop decodes it. Because the set of codes is closed, `load-failed` also covers storage failures in the model-management calls (for example a delete that fails).
 
+`download-failed` also covers a model name that is not in the package's manifest (`Model <name> is not in the manifest`) and a download whose files do not match the manifest (`Model <name> failed verification: ...`); in both cases nothing is kept on disk.
+
 Interruptions (calls, Siri, backgrounding) end capture without an error; the audio captured so far is returned by the next `stopRecording` / `stopStreaming`. A memory warning unloads an idle model (`modelState` goes to `present`); the next call reloads it.
+
+Audio kept across an interruption lives in memory only, never on disk, until the next `stopRecording`, `stopStreaming` or `cancelRecording` returns or discards it.
 
 A streaming session can also end without any signal reaching JavaScript: an interruption or backgrounding that arrives while the model is still loading, or WhisperKit's capture loop stopping on an internal error. `stopStreaming` then resolves with whatever was captured, possibly empty text, rather than rejecting.
 
@@ -102,11 +106,17 @@ A streaming session can also end without any signal reaching JavaScript: an inte
 
 ## Where models live
 
-`<Application Support>/expo-whisperkit/models/<name>`, excluded from iCloud backup. A model is reported `present` only after a complete download and a first successful load, which also caches the tokenizer so later loads need no network.
+`<Application Support>/expo-whisperkit/models/<name>`, excluded from iCloud backup. Models come from Argmax's Hugging Face repo `argmaxinc/whisperkit-coreml` and their tokenizer from the matching `openai/whisper-*` repo, both over HTTPS. The package only downloads what `ios/ModelManifest.swift` lists: for each variant, the repo commit, the model folder and the sha256 of every file, plus the tokenizer repo commit and the sha256 of its three files. After download every file is hashed and the folder is rejected on any mismatch, missing or extra file. The tokenizer is prefetched into `<Application Support>/expo-whisperkit/tokenizers/`, so a present model needs no network. A model is reported `present` only after a complete, verified download and a first successful load.
+
+Trust boundary: the manifest pins what Argmax and OpenAI published at those commits. It does not verify who published them; it makes a later change to either repo, or a compromised account, fail verification rather than silently change what the app runs.
+
+### Regenerating the manifest
+
+`npm run manifest -- base [small.en ...]` resolves `main` of both repos, downloads every file of each variant at that commit, and rewrites `ios/ModelManifest.swift`. Pass `--revision <sha>` or `--tokenizer-revision <sha>` to pin instead of resolving. Review the diff before committing: a changed hash means the published files changed.
 
 ## Bumping WhisperKit
 
-1. Change `WHISPERKIT_TAG` in `ios/whisperkit_version.rb`.
+1. Change `WHISPERKIT_TAG` and `WHISPERKIT_COMMIT` in `ios/whisperkit_version.rb` (`git ls-remote --tags https://github.com/argmaxinc/argmax-oss-swift.git 'v*'` shows the commit), `whisperKitVersion` in `Package.swift`, and let `npm run test:ios` refresh `Package.resolved`; it refuses to run while the three disagree.
 2. `cd example && npx expo prebuild -p ios --clean && npx expo run:ios --configuration Release`.
 3. Run the Maestro flows (`example/e2e`, see `CLAUDE.md`).
 4. Tag a release.
@@ -115,6 +125,7 @@ A streaming session can also end without any signal reaching JavaScript: an inte
 
 - `npm run prepare` builds; `CI=1 npm test` and `CI=1 npm test plugin` run Jest; `npm run test:ios` runs the Swift unit tests on the simulator; `npm run lint`.
 - The example app in `example/` is the test bed; see `CLAUDE.md` for the simulator and Maestro commands.
+- `npm audit` reports advisories in Expo's prebuild tooling (`@expo/config-plugins` through `xcode`). The published package has no runtime dependencies, so none of them reach an app; they clear when Expo updates its tooling. Revisit on each Expo SDK bump.
 
 ## License
 
