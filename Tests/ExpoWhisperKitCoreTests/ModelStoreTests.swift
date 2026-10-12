@@ -85,4 +85,26 @@ final class ModelStoreTests: XCTestCase {
     let store: any ModelStoring = ModelStore(root: root)
     XCTAssertNotNil(store)
   }
+
+  func testDownloadOfAnUnlistedModelRejectsBeforeAnyNetwork() async {
+    let store = ModelStore(root: root)
+    do {
+      _ = try await store.download("not-a-model") { _ in }
+      XCTFail("expected download-failed")
+    } catch {
+      XCTAssertEqual((error as? WhisperKitError)?.code, .downloadFailed)
+      XCTAssertEqual((error as? WhisperKitError)?.message, "Model not-a-model is not in the manifest")
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("downloads/not-a-model").path))
+    let downloading = await store.isDownloading("not-a-model")
+    XCTAssertFalse(downloading)
+  }
+
+  func testDownloadOfAPresentUnlistedModelReturnsItsFolder() async throws {
+    // Present wins over the manifest, so a model downloaded by an earlier version keeps working.
+    let store = ModelStore(root: root)
+    let folder = try makeFolder("models/not-a-model")
+    let returned = try await store.download("not-a-model") { _ in }
+    XCTAssertEqual(returned.path, folder.path)
+  }
 }
