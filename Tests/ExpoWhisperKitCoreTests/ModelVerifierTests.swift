@@ -38,15 +38,31 @@ final class ModelVerifierTests: XCTestCase {
   }
 
   func testSha256StreamsALargeFile() throws {
-    // 3 MiB of zeros crosses the 1 MiB read chunk more than once; the digest is the known
-    // sha256 of 3,145,728 zero bytes, computed with `head -c 3145728 /dev/zero | shasum -a 256`.
+    // 3 MiB of zeros crosses the 1 MiB read chunk more than once. The expected digest is the
+    // sha256 of 3,145,728 zero bytes: `head -c 3145728 /dev/zero | shasum -a 256`.
     let url = folder.appendingPathComponent("big.bin")
     try Data(count: 3 * 1024 * 1024).write(to: url)
     let hash = try ModelVerifier.sha256(of: url)
+    XCTAssertEqual(hash, "bbd05cf6097ac9b1f89ea29d2542c1b7b67ee46848393895f5a9e43fa1f621e5")
     XCTAssertEqual(hash.count, 64)
     XCTAssertTrue(hash.allSatisfy { "0123456789abcdef".contains($0) })
     XCTAssertEqual(hash, try ModelVerifier.sha256(of: url), "deterministic")
     XCTAssertNotEqual(hash, emptyHash, "all chunks were hashed")
+  }
+
+  func testVerifyOrRemoveDeletesTheFolderOnMismatch() throws {
+    try write("tokenizer.json", "abd")
+    XCTAssertThrowsError(try ModelVerifier.verifyOrRemove(folder: folder, files: ["tokenizer.json": abcHash], model: "base")) { error in
+      XCTAssertEqual((error as? WhisperKitError)?.code, .downloadFailed)
+      XCTAssertEqual((error as? WhisperKitError)?.message, "Model base failed verification: tokenizer.json does not match the manifest")
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+  }
+
+  func testVerifyOrRemoveKeepsAMatchingFolder() throws {
+    try write("tokenizer.json", "abc")
+    XCTAssertNoThrow(try ModelVerifier.verifyOrRemove(folder: folder, files: ["tokenizer.json": abcHash], model: "base"))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("tokenizer.json").path))
   }
 
   func testRegularFilesAreRelativeSortedAndIncludeHidden() throws {

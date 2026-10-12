@@ -157,6 +157,7 @@ actor ModelStore: ModelStoring {
 
   /// Snapshots the tokenizer files into `tokenizers/models/<repo>`, where WhisperKit's
   /// `loadTokenizer` looks first, so the probe load and every later load read them offline.
+  /// A folder that fails verification is removed, so the next attempt downloads afresh.
   private func fetchTokenizer(_ entry: ManifestEntry, model: String) async throws {
     let hub = HubApiWrapper(downloadBase: tokenizersDir)
     let folder = try await hub.snapshot(
@@ -164,6 +165,6 @@ actor ModelStore: ModelStoring {
       revision: entry.tokenizerRevision,
       matching: entry.tokenizerFiles.keys.sorted()
     )
-    try ModelVerifier.verify(folder: folder, files: entry.tokenizerFiles, model: model)
+    try ModelVerifier.verifyOrRemove(folder: folder, files: entry.tokenizerFiles, model: model)
   }
 }

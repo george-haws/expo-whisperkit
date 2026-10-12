@@ -15,6 +15,17 @@ struct ManifestEntry: Sendable {
 
 /// Checks a downloaded folder against its manifest entry. No network.
 enum ModelVerifier {
+  /// `verify`, and on any failure the folder is removed before the error is rethrown, so a
+  /// later attempt starts from nothing instead of re-reading the rejected files.
+  static func verifyOrRemove(folder: URL, files: [String: String], model: String) throws {
+    do {
+      try verify(folder: folder, files: files, model: model)
+    } catch {
+      try? FileManager.default.removeItem(at: folder)
+      throw error
+    }
+  }
+
   /// Throws `download-failed` unless `folder` holds every file in `files` with the listed sha256
   /// and nothing else, apart from the Hub client's `.cache/` sidecars.
   static func verify(folder: URL, files: [String: String], model: String) throws {
