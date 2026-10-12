@@ -12,10 +12,15 @@ actor FakeStore: ModelStoring {
   private(set) var committed: [String] = []
   private(set) var discarded: [String] = []
   private var downloadError: Error?
+  private var commitError: Error?
+  private var turnsPresentDuringFetch = false
 
   func setPresent(_ models: Set<String>) { present = models }
   func setDownloading(_ models: Set<String>) { downloading = models }
   func setDownloadError(_ error: Error?) { downloadError = error }
+  func setCommitError(_ error: Error?) { commitError = error }
+  /// Models a concurrent commit: the next `download` finds the model present and fetches nothing.
+  func setTurnsPresentDuringFetch(_ value: Bool) { turnsPresentDuringFetch = value }
 
   func finalFolder(for model: String) -> URL {
     URL(fileURLWithPath: "/fake/models/\(model)", isDirectory: true)
@@ -34,9 +39,13 @@ actor FakeStore: ModelStoring {
     deleted.append(model)
   }
 
-  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL? {
     downloads.append(model)
     if let downloadError { throw downloadError }
+    if turnsPresentDuringFetch {
+      present.insert(model)
+      return nil
+    }
     downloading.insert(model)
     progress(0.5)
     progress(1)
@@ -44,6 +53,7 @@ actor FakeStore: ModelStoring {
   }
 
   func commit(_ model: String) throws {
+    if let commitError { throw commitError }
     committed.append(model)
     downloading.remove(model)
     present.insert(model)

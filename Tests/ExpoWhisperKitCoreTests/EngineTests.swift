@@ -263,6 +263,19 @@ final class EngineTests: XCTestCase {
     XCTAssertEqual(downloads, [])
   }
 
+  func testDownloadThatFindsTheModelPresentAfterTheFetchSkipsTheProbe() async throws {
+    await store.setPresent([])
+    await store.setTurnsPresentDuringFetch(true)
+    try await engine.download("base")
+    XCTAssertEqual(events.states, ["base:downloading", "base:present"])
+    XCTAssertEqual(loader.calls, 0, "nothing to validate: another path committed the model")
+    XCTAssertEqual(model.unloads, 0)
+    let committed = await store.committed
+    XCTAssertEqual(committed, [])
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+  }
+
   func testDownloadWhileDownloadingIsBusyBeforeAnyEvent() async {
     await store.setPresent([])
     await store.setDownloading(["base"])
@@ -304,6 +317,24 @@ final class EngineTests: XCTestCase {
     XCTAssertEqual(events.states, ["base:downloading", "base:absent"])
     let present = await store.isPresent("base")
     XCTAssertFalse(present)
+    let busy = await engine.isBusy
+    XCTAssertFalse(busy)
+  }
+
+  func testCommitFailureDiscardsAndIsDownloadFailed() async {
+    await store.setPresent([])
+    await store.setCommitError(NSError(domain: "test", code: 6, userInfo: [NSLocalizedDescriptionKey: "disk full"]))
+    do {
+      try await engine.download("base")
+      XCTFail("expected download-failed")
+    } catch {
+      XCTAssertEqual(code(error), .downloadFailed)
+      XCTAssertEqual((error as? WhisperKitError)?.message, "Downloading base failed: disk full")
+    }
+    let discarded = await store.discarded
+    XCTAssertEqual(discarded, ["base"])
+    XCTAssertEqual(events.states, ["base:downloading", "base:absent"])
+    XCTAssertEqual(model.unloads, 1, "the probe instance was unloaded before the commit")
     let busy = await engine.isBusy
     XCTAssertFalse(busy)
   }

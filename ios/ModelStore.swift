@@ -9,9 +9,11 @@ protocol ModelStoring: Actor {
   func isDownloading(_ model: String) -> Bool
   func listPresent() -> [String]
   func delete(_ model: String) throws
-  /// Fetches the files into a staging folder and returns it (or the final folder when the model is already present, which `commit` tolerates). The model stays "downloading"
+  /// Fetches the files into a staging folder and returns it. The model stays "downloading"
   /// until `commit` or `discard`; the caller validates the files (a first load) in between.
-  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL
+  /// Returns nil when the model is already present (another download committed it first): nothing
+  /// was fetched, the model is not "downloading", and there is nothing to commit or discard.
+  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL?
   /// Moves the staged folder into place: the model is present and no longer downloading.
   func commit(_ model: String) throws
   /// Removes the staged folder: the model is absent and no longer downloading.
@@ -97,9 +99,9 @@ actor ModelStore: ModelStoring {
   /// Downloads `model` into the staging area. The first load that validates the files and caches
   /// the tokenizer is the Engine's job, under its exclusivity, so at most one WhisperKit instance
   /// exists at a time; `commit` then moves the folder into place.
-  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+  func download(_ model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL? {
     if isPresent(model) {
-      return finalFolder(for: model)
+      return nil
     }
     guard !downloading.contains(model) else {
       throw WhisperKitError(.busy, "Model \(model) is already downloading")

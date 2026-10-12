@@ -52,7 +52,9 @@ actor Engine {
     if await store.isPresent(model) {
       return
     }
-    let staging = try await fetch(model)
+    guard let staging = try await fetch(model) else {
+      return
+    }
     await awaitExclusive()
     do {
       try await validateAndCommitLocked(model, staging: staging)
@@ -63,8 +65,10 @@ actor Engine {
     await endExclusive()
   }
 
-  /// The network part of a download. Emits `downloading` first and `absent` on failure.
-  private func fetch(_ model: String) async throws -> URL {
+  /// The network part of a download. Emits `downloading` first and `absent` on failure. Returns
+  /// nil, after emitting `present`, when the store finds the model already present (another
+  /// download committed it after the caller's presence check): there is nothing to validate.
+  private func fetch(_ model: String) async throws -> URL? {
     // Refuse a second download before emitting anything, so listeners never see a false "absent".
     if await store.isDownloading(model) {
       throw WhisperKitError(.busy, "Model \(model) is already downloading")
@@ -72,7 +76,11 @@ actor Engine {
     emitState(model, "downloading")
     do {
       let emitProgress = self.emitProgress
-      return try await store.download(model) { fraction in emitProgress(model, fraction) }
+      guard let staging = try await store.download(model, progress: { fraction in emitProgress(model, fraction) }) else {
+        emitState(model, "present")
+        return nil
+      }
+      return staging
     } catch let error as WhisperKitError where error.code == .busy {
       // Another download of this model won the race; its own events describe the state.
       throw error
@@ -171,8 +179,9 @@ actor Engine {
       guard download else {
         throw WhisperKitError(.modelMissing, "Model \(model) is not downloaded")
       }
-      let staging = try await fetch(model)
-      try await validateAndCommitLocked(model, staging: staging)
+      if let staging = try await fetch(model) {
+        try await validateAndCommitLocked(model, staging: staging)
+      }
     }
     await unloadNow()
     let folder = await store.finalFolder(for: model)
@@ -253,6 +262,7 @@ actor Engine {
   }
 
   /// Runs any deferred unload first, then hands exclusivity to a waiting download, or releases it.
+  /// Call it exactly once per exclusive section: a second call would hand exclusivity to a waiting download or clear busy under a running one.
   func endExclusive() async {
     while unloadAfterCurrent {
       unloadAfterCurrent = false
