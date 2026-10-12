@@ -44,7 +44,10 @@ async function resolveRevision(repo) {
 }
 
 async function listFiles(repo, revision) {
-  return (await json(`${ENDPOINT}/api/models/${repo}?revision=${revision}`)).siblings.map((s) => s.rfilename);
+  // The `?revision=` query is ignored by the API (it returns main); the /revision/ path is not.
+  const { sha, siblings } = await json(`${ENDPOINT}/api/models/${repo}/revision/${revision}`);
+  if (sha !== revision) throw new Error(`manifest: ${repo} revision ${revision} resolved to ${sha}`);
+  return siblings.map((s) => s.rfilename);
 }
 
 // WhisperKit.download searches "*<variant>/*", then "*openai*<variant>/*" when that is ambiguous.
