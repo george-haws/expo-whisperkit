@@ -28,11 +28,11 @@
     "open:ios": "node internal/module_scripts/open-ios.js"
   },
   "keywords": ["react-native", "expo", "whisperkit", "speech-to-text", "expo-whisperkit"],
-  "repository": "https://github.com/georgeelliott/expo-whisperkit",
-  "bugs": { "url": "https://github.com/georgeelliott/expo-whisperkit/issues" },
-  "author": "George Elliott <geehaws@gmail.com> (https://github.com/georgeelliott)",
+  "repository": "https://github.com/george-haws/expo-whisperkit",
+  "bugs": { "url": "https://github.com/george-haws/expo-whisperkit/issues" },
+  "author": "George Haws <geehaws@gmail.com> (https://github.com/george-haws)",
   "license": "MIT",
-  "homepage": "https://github.com/georgeelliott/expo-whisperkit#readme",
+  "homepage": "https://github.com/george-haws/expo-whisperkit#readme",
   "dependencies": {},
   "devDependencies": {
     "@babel/core": "^7.29.7",

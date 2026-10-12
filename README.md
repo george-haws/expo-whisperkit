@@ -9,7 +9,7 @@ Android is not supported: the package compiles there and every call rejects with
 Until this is on npm, install from a git tag:
 
 ```sh
-npm install github:georgeelliott/expo-whisperkit#v0.1.0
+npm install github:george-haws/expo-whisperkit#v0.1.0
 ```
 
 Add the config plugin to `app.json`:
