@@ -68,7 +68,7 @@ sub.remove();
 | Function | Notes |
 |---|---|
 | `isAvailable()` | `false` on Android or without the native module |
-| `getModelStatus(model?)`, `downloadModel(model?)`, `deleteModel(model)`, `listDownloadedModels()`, `loadModel(model?)`, `unloadModel()` | Model is `DEFAULT_MODEL` (`'base'`) when omitted. Models load lazily on first use; `loadModel` is an optional prewarm. One model is loaded at a time. Model names may contain only letters, digits, `.`, `_` and `-`, must not start with `.` and must not contain `..`; any other name rejects with `model-missing`. |
+| `getModelStatus(model?)`, `downloadModel(model?)`, `deleteModel(model)`, `listDownloadedModels()`, `loadModel(model?)`, `unloadModel()` | Model is `DEFAULT_MODEL` (`'base'`) when omitted. Models load lazily on first use; `loadModel` is an optional prewarm. One model is loaded at a time. Model names may contain only ASCII letters, digits, `.`, `_` and `-`, must not start with `.` and must not contain `..`; any other name rejects with `model-missing`. |
 | `transcribeFile(uri, options?)` | Any format AVFoundation reads |
 | `getMicrophonePermission()`, `requestMicrophonePermission()` | Only `request` prompts |
 | `startRecording()`, `stopRecording(options?)`, `cancelRecording()` | Push-to-talk; `stop` returns the transcription |
@@ -106,7 +106,7 @@ A streaming session can also end without any signal reaching JavaScript: an inte
 
 ## Where models live
 
-`<Application Support>/expo-whisperkit/models/<name>`, excluded from iCloud backup. Models come from Argmax's Hugging Face repo `argmaxinc/whisperkit-coreml` and their tokenizer from the matching `openai/whisper-*` repo, both over HTTPS. The package only downloads what `ios/ModelManifest.swift` lists: for each variant, the repo commit, the model folder and the sha256 of every file, plus the tokenizer repo commit and the sha256 of its three files. After download every file is hashed and the folder is rejected on any mismatch, missing or extra file. The tokenizer is prefetched into `<Application Support>/expo-whisperkit/tokenizers/`, so a present model needs no network. A model is reported `present` only after a complete, verified download and a first successful load.
+`<Application Support>/expo-whisperkit/models/<name>`, excluded from iCloud backup. Models come from Argmax's Hugging Face repo `argmaxinc/whisperkit-coreml` and their tokenizer from the matching `openai/whisper-*` repo, both over HTTPS. The package only downloads what `ios/ModelManifest.swift` lists: for each variant, the repo commit, the model folder and the sha256 of every file, plus the tokenizer repo commit and the sha256 of its three files. After download every file is hashed and the folder is rejected on any mismatch, missing or extra file. The tokenizer is prefetched into `<Application Support>/expo-whisperkit/tokenizers/`, so a present model needs no network. A model is reported `present` only after a complete, verified download and a first successful load. Models downloaded by an earlier version of this package are not re-verified: a present folder is used as is, and an unlisted variant that was downloaded earlier keeps working until it is deleted, after which it cannot be downloaded again.
 
 Trust boundary: the manifest pins what Argmax and OpenAI published at those commits. It does not verify who published them; it makes a later change to either repo, or a compromised account, fail verification rather than silently change what the app runs.
 
