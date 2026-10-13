@@ -28,3 +28,5 @@ DerivedData/
 
 # agent workspace
 .superpowers/
+/CLAUDE.md
+/docs/superpowers/
