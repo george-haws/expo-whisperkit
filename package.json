@@ -26,6 +26,7 @@
     "test": "node internal/module_scripts/test.js",
     "test:ios": "node internal/module_scripts/test-ios.js",
     "sim": "node internal/module_scripts/simulator.js",
+    "check:pack": "node internal/module_scripts/check-pack.js",
     "manifest": "node internal/module_scripts/manifest.js",
     "prepare": "node internal/module_scripts/prepare.js",
     "open:ios": "node internal/module_scripts/open-ios.js"
