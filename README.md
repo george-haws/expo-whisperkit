@@ -56,7 +56,7 @@ if ((await WhisperKit.requestMicrophonePermission()) === 'granted') {
 }
 
 // Any audio file
-const result = await WhisperKit.transcribeFile(fileUri, { prompt: 'tahini, za\'atar' });
+const result = await WhisperKit.transcribeFile(fileUri, { prompt: 'WhisperKit, CoreML' });
 
 // Streaming
 const sub = WhisperKit.addListener('streamingUpdate', ({ confirmedText, pendingText }) => {});

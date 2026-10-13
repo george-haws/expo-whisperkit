@@ -6,7 +6,7 @@ import withWhisperKit, {
 
 const PODFILE = `platform :ios, '16.4'
 
-target 'chef' do
+target 'example' do
   use_expo_modules!
 
   config = use_native_modules!(config_command)

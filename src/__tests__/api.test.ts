@@ -112,14 +112,14 @@ describe('transcribeFile', () => {
       model: 'small.en',
       language: 'en',
       task: 'translate',
-      prompt: 'tahini',
+      prompt: 'WhisperKit',
       download: false,
     });
     expect(native.transcribeFile).toHaveBeenCalledWith('/a.wav', {
       model: 'small.en',
       language: 'en',
       task: 'translate',
-      prompt: 'tahini',
+      prompt: 'WhisperKit',
       download: false,
     });
   });
