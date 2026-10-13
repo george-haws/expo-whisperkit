@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+# Under workflow_call, github.workflow and github.event_name are the caller's (Release, push), so a
+# run called by release.yml never shares a group with a direct run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MAESTRO_VERSION: 2.10.0
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: CI=1 npm test
+      - run: CI=1 npm test plugin
+      - run: CI=1 npm test internal
+      - run: npm run check:pack
+
+  swift:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: latest-stable
+      - id: xcode
+        run: echo "version=$(xcodebuild -version | head -1 | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: swiftpm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-${{ hashFiles('Package.resolved') }}
+      - run: npm ci
+      - run: npm run test:ios
+
+  e2e:
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            example/package-lock.json
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: latest-stable
+      - run: npm ci
+      - run: npm ci
+        working-directory: example
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('ios/whisperkit_version.rb', 'example/package-lock.json') }}
+      - name: Boot a simulator
+        run: echo "SIM=$(npm run --silent sim -- --boot)" >> "$GITHUB_ENV"
+      - name: Build and install the example app (Release)
+        working-directory: example
+        env:
+          CI: 1
+        run: |
+          npx expo prebuild -p ios --clean
+          npx expo run:ios --configuration Release --device "$SIM" --no-bundler 2>&1 | tee xcodebuild.log
+      - run: xcrun simctl privacy "$SIM" grant microphone expo.modules.whisperkit.example
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Maestro flows
+        run: maestro --device "$SIM" test example/e2e/ --format junit --output maestro-report.xml
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-${{ github.run_attempt }}
+          path: |
+            maestro-report.xml
+            ~/.maestro/tests/
+            example/xcodebuild.log
+          retention-days: 14
+          if-no-files-found: ignore
