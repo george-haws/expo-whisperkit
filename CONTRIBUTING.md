@@ -20,7 +20,7 @@ npm install   # also runs `npm run prepare`, which builds build/ and plugin/buil
 
 - `checks` (Linux): lint, the three Jest suites (`CI=1 npm test`, `CI=1 npm test plugin`, `CI=1 npm test internal`) and `npm run check:pack`, which fails if the tarball would ship maintainer files or miss a file consumers need.
 - `swift` (macOS): `npm run test:ios`.
-- `e2e` (macOS): the example app's Release build and all four Maestro flows. Flow 10 downloads the `base` model from Hugging Face every run; nothing is cached there on purpose. On failure, the run's `e2e-*` artifact holds the Maestro screenshots and the build log.
+- `e2e` (macOS): the example app's Release build and all four Maestro flows. Flow 10 downloads the `base` model from Hugging Face every run; nothing is cached there on purpose. Every run uploads an `e2e-*` artifact with the Maestro report, screenshots and the build log.
 
 `npm run --silent sim -- --boot` prints and boots the simulator CI uses; `EXPO_WHISPERKIT_SIM` pins one locally.
 
