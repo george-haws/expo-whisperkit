@@ -3,6 +3,7 @@
 // ios/whisperkit_version.rb pin different WhisperKit versions. Extra arguments go to xcodebuild,
 // e.g. `npm run test:ios -- -only-testing:ExpoWhisperKitCoreTests/EngineTests`.
 const { spawnSync } = require('child_process');
+const { pickSimulator } = require('./simulator');
 const fs = require('fs');
 const path = require('path');
 
@@ -35,32 +36,6 @@ if (!pin || pin.state.revision !== commit) {
     `test-ios: WhisperKit commit drift: ios/whisperkit_version.rb pins ${commit}, Package.resolved pins ${pin ? pin.state.revision : 'nothing'}`
   );
   process.exit(1);
-}
-
-// EXPO_WHISPERKIT_SIM pins a simulator UDID. Otherwise use a booted iPhone, else an iPhone on the
-// newest iOS runtime.
-function pickSimulator() {
-  if (process.env.EXPO_WHISPERKIT_SIM) return process.env.EXPO_WHISPERKIT_SIM;
-  const list = spawnSync('xcrun', ['simctl', 'list', 'devices', 'available', '-j'], { encoding: 'utf8' });
-  if (list.status !== 0) {
-    console.error('test-ios: `xcrun simctl list` failed; is Xcode installed?');
-    process.exit(1);
-  }
-  const iphones = Object.entries(JSON.parse(list.stdout).devices)
-    .map(([runtime, devices]) => {
-      const match = /\.iOS-(\d+)-(\d+)$/.exec(runtime);
-      return match ? devices.map((d) => ({ ...d, os: Number(match[1]) * 100 + Number(match[2]) })) : [];
-    })
-    .flat()
-    .filter((d) => d.name.startsWith('iPhone'))
-    .sort((a, b) => b.os - a.os);
-  const device = iphones.find((d) => d.state === 'Booted') || iphones[0];
-  if (!device) {
-    console.error('test-ios: no available iPhone simulator. Create one in Xcode, or set EXPO_WHISPERKIT_SIM.');
-    process.exit(1);
-  }
-  console.log(`test-ios: using ${device.name} (${device.udid}); set EXPO_WHISPERKIT_SIM to pin another`);
-  return device.udid;
 }
 
 const simulator = pickSimulator();

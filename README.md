@@ -1,5 +1,7 @@
 # expo-whisperkit
 
+[![CI](https://github.com/george-haws/expo-whisperkit/actions/workflows/ci.yml/badge.svg)](https://github.com/george-haws/expo-whisperkit/actions/workflows/ci.yml)
+
 On-device speech to text for Expo apps on iOS and iPadOS, powered by [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) (Argmax, MIT). Models download on demand, transcription runs offline, and every failure carries a typed code.
 
 This is a community package. It is not affiliated with or endorsed by Argmax, Inc.
