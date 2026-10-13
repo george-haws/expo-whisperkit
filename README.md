@@ -114,17 +114,9 @@ Trust boundary: the manifest pins what Argmax and OpenAI published at those comm
 
 `npm run manifest -- base [small.en ...]` resolves `main` of both repos, downloads every file of each variant at that commit, and rewrites `ios/ModelManifest.swift`. Pass `--revision <sha>` or `--tokenizer-revision <sha>` to pin instead of resolving. Review the diff before committing: a changed hash means the published files changed.
 
-## Bumping WhisperKit
+## Contributing
 
-1. Change `WHISPERKIT_TAG` and `WHISPERKIT_COMMIT` in `ios/whisperkit_version.rb` (`git ls-remote --tags https://github.com/argmaxinc/argmax-oss-swift.git 'v*'` shows the commit), `whisperKitVersion` in `Package.swift`, and let `npm run test:ios` refresh `Package.resolved`; it refuses to run while the three disagree.
-2. `cd example && npx expo prebuild -p ios --clean && npx expo run:ios --configuration Release`.
-3. Run the Maestro flows in `example/e2e` (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-4. Tag a release.
-
-## Development
-
-- Setup, checks, the example app and the Maestro flows are in [CONTRIBUTING.md](CONTRIBUTING.md).
-- `npm audit` reports advisories in Expo's prebuild tooling (`@expo/config-plugins` through `xcode`). The published package has no runtime dependencies, so none of them reach an app; they clear when Expo updates its tooling. Revisit on each Expo SDK bump.
+Setup, checks, the example app, the Maestro flows and how to bump WhisperKit are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
