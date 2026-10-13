@@ -3,7 +3,7 @@ const { spawnSyncWithAutoShell } = require('./util');
 const fs = require('fs');
 const path = require('path');
 
-const SUBTARGETS = ['plugin', 'cli', 'utils', 'scripts'];
+const SUBTARGETS = ['plugin', 'cli', 'utils', 'scripts', 'internal'];
 let args = process.argv.slice(2);
 
 // If the command is used like `yarn test plugin`, set the --rootDir option to the `plugin` directory
